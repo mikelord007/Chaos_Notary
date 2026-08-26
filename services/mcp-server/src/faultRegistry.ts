@@ -12,7 +12,12 @@ export interface ActiveFault {
   child?: ChildProcess;
 }
 
-export class ConflictError extends Error {}
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
 
 interface RegisterParams {
   container: AllowedContainer;
@@ -26,6 +31,13 @@ interface RegisterParams {
 
 export class FaultRegistry {
   private faults = new Map<AllowedContainer, ActiveFault>();
+  private log: (msg: string) => void;
+  private delayFn: (ms: number) => Promise<void>;
+
+  constructor(opts?: { log?: (msg: string) => void; delayFn?: (ms: number) => Promise<void> }) {
+    this.log = opts?.log ?? ((msg) => console.error(msg));
+    this.delayFn = opts?.delayFn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
 
   has(container: AllowedContainer): boolean {
     return this.faults.has(container);
@@ -67,13 +79,26 @@ export class FaultRegistry {
     const fault = this.faults.get(container);
     if (!fault) return;
     clearTimeout(fault.timer);
-    this.faults.delete(container);
-    await fault.revert();
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [1000, 5000, 15000];
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await fault.revert();
+        this.faults.delete(container);
+        return;
+      } catch (err) {
+        this.log(`revert attempt ${attempt}/${MAX_ATTEMPTS} for ${container} failed: ${(err as Error).message}`);
+        if (attempt < MAX_ATTEMPTS) {
+          await this.delayFn(BACKOFF_MS[attempt - 1]);
+        }
+      }
+    }
+    this.log(`${container} could not be reverted after ${MAX_ATTEMPTS} attempts (still marked as an active ${fault.kind} fault) — it will be retried on the server's next startup sweep.`);
   }
 
   async clear(container: AllowedContainer): Promise<boolean> {
     if (!this.faults.has(container)) return false;
     await this.revertAndRemove(container);
-    return true;
+    return !this.faults.has(container);
   }
 }

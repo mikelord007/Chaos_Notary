@@ -120,3 +120,57 @@ test("list returns every active fault", () => {
   });
   assert.equal(registry.list().length, 2);
 });
+
+test("revertAndRemove retries a failing revert with backoff, then succeeds, and removes the entry", async () => {
+  const registry = new FaultRegistry({ log: () => {}, delayFn: async () => {} });
+  const { scheduleTimer } = fakeScheduler();
+  let attempts = 0;
+  registry.register({
+    container: "chaos-pg-replica",
+    kind: "pause",
+    durationSeconds: 30,
+    revert: async () => {
+      attempts++;
+      if (attempts < 2) throw new Error("docker unpause failed");
+    },
+    scheduleTimer,
+  });
+  await registry.revertAndRemove("chaos-pg-replica");
+  assert.equal(attempts, 2);
+  assert.equal(registry.has("chaos-pg-replica"), false);
+});
+
+test("revertAndRemove logs and leaves the fault active after exhausting all retry attempts", async () => {
+  const logs: string[] = [];
+  const registry = new FaultRegistry({ log: (msg) => logs.push(msg), delayFn: async () => {} });
+  const { scheduleTimer } = fakeScheduler();
+  registry.register({
+    container: "chaos-pg-replica",
+    kind: "pause",
+    durationSeconds: 30,
+    revert: async () => {
+      throw new Error("docker unpause failed");
+    },
+    scheduleTimer,
+  });
+  await registry.revertAndRemove("chaos-pg-replica");
+  assert.equal(registry.has("chaos-pg-replica"), true);
+  assert.equal(logs.length, 4); // 3 attempt-failure logs + 1 final "could not be reverted" log
+});
+
+test("clear returns false when the revert ultimately fails after all retries", async () => {
+  const registry = new FaultRegistry({ log: () => {}, delayFn: async () => {} });
+  const { scheduleTimer } = fakeScheduler();
+  registry.register({
+    container: "chaos-pg-replica",
+    kind: "pause",
+    durationSeconds: 30,
+    revert: async () => {
+      throw new Error("docker unpause failed");
+    },
+    scheduleTimer,
+  });
+  const didClear = await registry.clear("chaos-pg-replica");
+  assert.equal(didClear, false);
+  assert.equal(registry.has("chaos-pg-replica"), true);
+});
