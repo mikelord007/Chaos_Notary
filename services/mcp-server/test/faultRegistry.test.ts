@@ -174,3 +174,29 @@ test("clear returns false when the revert ultimately fails after all retries", a
   assert.equal(didClear, false);
   assert.equal(registry.has("chaos-pg-replica"), true);
 });
+
+test("a second revertAndRemove call for the same container while one is already in progress is a no-op", async () => {
+  const registry = new FaultRegistry({ log: () => {}, delayFn: async () => {} });
+  const { scheduleTimer } = fakeScheduler();
+  let revertCallCount = 0;
+  let resolveFirstRevert: (() => void) | undefined;
+  registry.register({
+    container: "chaos-pg-replica",
+    kind: "pause",
+    durationSeconds: 30,
+    revert: async () => {
+      revertCallCount++;
+      await new Promise<void>((resolve) => {
+        resolveFirstRevert = resolve;
+      });
+    },
+    scheduleTimer,
+  });
+  const firstCall = registry.revertAndRemove("chaos-pg-replica");
+  // second call while the first is still in-flight (revert hasn't resolved yet)
+  await registry.revertAndRemove("chaos-pg-replica");
+  assert.equal(revertCallCount, 1, "the second call must not start its own revert attempt");
+  resolveFirstRevert!();
+  await firstCall;
+  assert.equal(registry.has("chaos-pg-replica"), false);
+});

@@ -31,6 +31,7 @@ interface RegisterParams {
 
 export class FaultRegistry {
   private faults = new Map<AllowedContainer, ActiveFault>();
+  private reverting = new Set<AllowedContainer>();
   private log: (msg: string) => void;
   private delayFn: (ms: number) => Promise<void>;
 
@@ -78,22 +79,28 @@ export class FaultRegistry {
   async revertAndRemove(container: AllowedContainer): Promise<void> {
     const fault = this.faults.get(container);
     if (!fault) return;
-    clearTimeout(fault.timer);
-    const MAX_ATTEMPTS = 3;
-    const BACKOFF_MS = [1000, 5000, 15000];
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        await fault.revert();
-        this.faults.delete(container);
-        return;
-      } catch (err) {
-        this.log(`revert attempt ${attempt}/${MAX_ATTEMPTS} for ${container} failed: ${(err as Error).message}`);
-        if (attempt < MAX_ATTEMPTS) {
-          await this.delayFn(BACKOFF_MS[attempt - 1]);
+    if (this.reverting.has(container)) return;
+    this.reverting.add(container);
+    try {
+      clearTimeout(fault.timer);
+      const MAX_ATTEMPTS = 3;
+      const BACKOFF_MS = [1000, 5000];
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          await fault.revert();
+          this.faults.delete(container);
+          return;
+        } catch (err) {
+          this.log(`revert attempt ${attempt}/${MAX_ATTEMPTS} for ${container} failed: ${(err as Error).message}`);
+          if (attempt < MAX_ATTEMPTS) {
+            await this.delayFn(BACKOFF_MS[attempt - 1]);
+          }
         }
       }
+      this.log(`${container} could not be reverted after ${MAX_ATTEMPTS} attempts (still marked as an active ${fault.kind} fault) — it will be retried on the server's next startup sweep.`);
+    } finally {
+      this.reverting.delete(container);
     }
-    this.log(`${container} could not be reverted after ${MAX_ATTEMPTS} attempts (still marked as an active ${fault.kind} fault) — it will be retried on the server's next startup sweep.`);
   }
 
   async clear(container: AllowedContainer): Promise<boolean> {
