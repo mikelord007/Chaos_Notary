@@ -5,7 +5,7 @@
 # Asserts, with real numbers pulled from Prometheus (not a visual check):
 #   1. stack comes up healthy and replication is live
 #   2. baseline error rate is near zero
-#   3. pausing pg-replica drives error rate well above baseline within 30s
+#   3. pausing pg-replica drives error rate well above baseline within 60s
 #   4. unpausing pg-replica recovers error rate to baseline within 60s
 set -euo pipefail
 
@@ -58,14 +58,21 @@ python3 -c "assert float('$baseline') < 1.0, 'baseline error rate too high'" \
 
 echo "== pausing pg-replica =="
 docker pause chaos-pg-replica
-sleep 30
+# Safety net: if anything below fails/exits before the explicit unpause,
+# don't leave the stack permanently faulted for the next run.
+trap 'docker unpause chaos-pg-replica >/dev/null 2>&1 || true' EXIT
+# Sleep a full minute so the 1m Prometheus rate window is entirely inside
+# the fault period. Only reads (~70% of loadgen traffic) fail while the
+# replica is paused, so a partial window under-samples the error rate.
+sleep 60
 faulted=$(prom_query '100 * (sum(rate(http_requests_total{status=~"5.."}[1m])) or vector(0)) / sum(rate(http_requests_total[1m]))')
 echo "error rate during fault: ${faulted}%"
 python3 -c "assert float('$faulted') > 40.0, 'fault did not raise error rate enough'" \
-  || { echo "FAIL: error rate during fault only ${faulted}%, expected > 40%"; docker unpause chaos-pg-replica; exit 1; }
+  || { echo "FAIL: error rate during fault only ${faulted}%, expected > 40%"; exit 1; }
 
 echo "== unpausing pg-replica =="
 docker unpause chaos-pg-replica
+trap - EXIT
 sleep 60
 recovered=$(prom_query '100 * (sum(rate(http_requests_total{status=~"5.."}[1m])) or vector(0)) / sum(rate(http_requests_total[1m]))')
 echo "error rate after recovery: ${recovered}%"

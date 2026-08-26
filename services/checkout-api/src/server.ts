@@ -87,9 +87,14 @@ interface CreateOrderBody {
 
 app.post<{ Body: CreateOrderBody }>("/orders", async (request, reply) => {
   const { productId, quantity } = request.body ?? {};
-  if (!productId || !quantity || quantity < 1) {
+  if (
+    !Number.isInteger(productId) ||
+    (productId as number) <= 0 ||
+    !Number.isInteger(quantity) ||
+    (quantity as number) < 1
+  ) {
     reply.code(400);
-    return { error: "productId and quantity are required" };
+    return { error: "productId and quantity must be positive integers" };
   }
   try {
     const result = await writePool.query(
@@ -99,6 +104,12 @@ app.post<{ Body: CreateOrderBody }>("/orders", async (request, reply) => {
     reply.code(201);
     return { id: result.rows[0].id };
   } catch (err) {
+    // Foreign-key violation means the client sent a productId that doesn't
+    // exist — a bad request, not a primary-database outage.
+    if (err && typeof err === "object" && "code" in err && err.code === "23503") {
+      reply.code(404);
+      return { error: "product not found" };
+    }
     app.log.error({ err }, "primary unavailable");
     reply.code(503);
     return { error: "primary unavailable" };
