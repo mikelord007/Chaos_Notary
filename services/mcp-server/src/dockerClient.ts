@@ -19,11 +19,23 @@ export async function inspectContainer(
   };
 }
 
+function isAlreadyUnpausedError(err: unknown): boolean {
+  const statusCode = (err as { statusCode?: number } | null)?.statusCode;
+  const message = (err as { message?: string } | null)?.message ?? "";
+  return statusCode === 500 && /not paused/i.test(message);
+}
+
+function isAlreadyStartedError(err: unknown): boolean {
+  const statusCode = (err as { statusCode?: number } | null)?.statusCode;
+  return statusCode === 304;
+}
+
 export async function unpauseContainer(docker: Docker, container: AllowedContainer): Promise<void> {
   try {
     await docker.getContainer(container).unpause();
   } catch (err) {
-    // Already unpaused — this call is meant to be safe to make unconditionally.
+    if (isAlreadyUnpausedError(err)) return;
+    throw err;
   }
 }
 
@@ -31,7 +43,8 @@ export async function startContainer(docker: Docker, container: AllowedContainer
   try {
     await docker.getContainer(container).start();
   } catch (err) {
-    // Already running — this call is meant to be safe to make unconditionally.
+    if (isAlreadyStartedError(err)) return;
+    throw err;
   }
 }
 
@@ -44,12 +57,16 @@ export async function startupSweep(docker: Docker, log: (msg: string) => void): 
       log(`startup sweep: could not inspect ${container}, skipping: ${(err as Error).message}`);
       continue;
     }
-    if (status.paused) {
-      log(`startup sweep: ${container} was paused, unpausing`);
-      await unpauseContainer(docker, container);
-    } else if (status.dockerStatus !== "running") {
-      log(`startup sweep: ${container} was ${status.dockerStatus}, starting`);
-      await startContainer(docker, container);
+    try {
+      if (status.paused) {
+        log(`startup sweep: ${container} was paused, unpausing`);
+        await unpauseContainer(docker, container);
+      } else if (status.dockerStatus !== "running") {
+        log(`startup sweep: ${container} was ${status.dockerStatus}, starting`);
+        await startContainer(docker, container);
+      }
+    } catch (err) {
+      log(`startup sweep: failed to revert ${container}: ${(err as Error).message}`);
     }
   }
 }

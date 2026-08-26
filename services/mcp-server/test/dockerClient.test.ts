@@ -76,3 +76,55 @@ test("startupSweep unpauses paused containers and starts stopped ones", async ()
   assert.deepEqual(calls, ["unpause:chaos-pg-replica", "start:chaos-checkout-api"]);
   assert.equal(logs.length, 2);
 });
+
+test("unpauseContainer rethrows an unexpected error (not the 'already unpaused' case)", async () => {
+  const docker = {
+    getContainer() {
+      return {
+        async unpause() {
+          const err: any = new Error("docker daemon unreachable");
+          err.statusCode = 500;
+          throw err;
+        },
+      };
+    },
+  } as any;
+  await assert.rejects(unpauseContainer(docker, "chaos-pg-replica"), /daemon unreachable/);
+});
+
+test("startContainer rethrows an unexpected error (not the 304 already-started case)", async () => {
+  const docker = {
+    getContainer() {
+      return {
+        async start() {
+          const err: any = new Error("no such container");
+          err.statusCode = 404;
+          throw err;
+        },
+      };
+    },
+  } as any;
+  await assert.rejects(startContainer(docker, "chaos-pg-replica"), /no such container/);
+});
+
+test("startupSweep logs and continues to the next container when a revert genuinely fails", async () => {
+  const docker = {
+    getContainer(name: string) {
+      return {
+        async inspect() {
+          if (name === "chaos-pg-primary") return { State: { Status: "running", Paused: false } };
+          if (name === "chaos-pg-replica") return { State: { Status: "running", Paused: true } };
+          return { State: { Status: "running", Paused: false } };
+        },
+        async unpause() {
+          const err: any = new Error("docker daemon unreachable");
+          err.statusCode = 500;
+          throw err;
+        },
+      };
+    },
+  } as any;
+  const logs: string[] = [];
+  await assert.doesNotReject(startupSweep(docker, (msg) => logs.push(msg)));
+  assert.ok(logs.some((l) => l.includes("failed to revert chaos-pg-replica")));
+});
