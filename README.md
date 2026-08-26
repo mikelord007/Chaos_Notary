@@ -84,5 +84,19 @@ non-production, committed intentionally for a self-contained demo stack.
 
 ## Qodo Code Review Evidence
 
-See [`docs/qodo-evidence.md`](docs/qodo-evidence.md) for the per-PR record of
-what Qodo flagged and how it was resolved.
+[PR #1 — M1: Target stack](https://github.com/mikelord007/Chaos_Notary/pull/1)
+(merged) is the representative example: Qodo's first pass found 3 real bugs —
+a flaky acceptance-test assertion that could reject a correctly-working chaos
+experiment, `POST /orders` misclassifying client input errors as primary-DB
+outages, and a test script that could leave `pg-replica` permanently paused
+if it failed partway through. All three were fixed in
+[a052b77](https://github.com/mikelord007/Chaos_Notary/commit/a052b7721ed0cbe3c5c2bf92e39f2bbf8e3ac90c),
+and a follow-up Qodo review against that commit confirmed all three resolved
+with zero new findings before merge. The PR's comment history shows the full
+loop: initial review → fixes → follow-up review.
+
+Per-PR record, one line per merged PR:
+
+| PR | What Qodo flagged | Resolution |
+|---|---|---|
+| [#1 — M1: Target stack](https://github.com/mikelord007/Chaos_Notary/pull/1) | 3 bugs: flaky fault-rate assertion in `verify-m1.sh` (High), client input errors misclassified as primary-DB outages in `POST /orders` (Medium), test script could leave `pg-replica` permanently paused on failure (Medium) | All 3 fixed in [a052b77](https://github.com/mikelord007/Chaos_Notary/commit/a052b7721ed0cbe3c5c2bf92e39f2bbf8e3ac90c); follow-up Qodo review confirmed 0 remaining findings before merge |
