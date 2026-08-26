@@ -1,0 +1,116 @@
+# Dev-only credentials below. Deliberately non-production: obvious throwaway
+# values, no secrets manager, committed in plain text on purpose for a
+# hackathon demo stack.
+
+services:
+  pg-primary:
+    image: bitnamilegacy/postgresql:16
+    container_name: chaos-pg-primary
+    environment:
+      POSTGRESQL_REPLICATION_MODE: master
+      POSTGRESQL_REPLICATION_USER: replicator
+      POSTGRESQL_REPLICATION_PASSWORD: chaos_dev_replica_not_a_secret
+      POSTGRESQL_USERNAME: checkout
+      POSTGRESQL_PASSWORD: chaos_dev_only_not_a_secret
+      POSTGRESQL_DATABASE: checkout
+    volumes:
+      - pg_primary_data:/bitnami/postgresql
+      - ./db/primary-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "checkout", "-d", "checkout"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pg-replica:
+    image: bitnamilegacy/postgresql:16
+    container_name: chaos-pg-replica
+    environment:
+      POSTGRESQL_REPLICATION_MODE: slave
+      POSTGRESQL_REPLICATION_USER: replicator
+      POSTGRESQL_REPLICATION_PASSWORD: chaos_dev_replica_not_a_secret
+      POSTGRESQL_MASTER_HOST: pg-primary
+      POSTGRESQL_MASTER_PORT_NUMBER: "5432"
+      POSTGRESQL_PASSWORD: chaos_dev_only_not_a_secret
+    volumes:
+      - pg_replica_data:/bitnami/postgresql
+    ports:
+      - "5433:5432"
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "checkout"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  checkout-api:
+    build: ./services/checkout-api
+    container_name: chaos-checkout-api
+    environment:
+      PORT: "3000"
+      PG_PRIMARY_HOST: pg-primary
+      PG_PRIMARY_PORT: "5432"
+      PG_REPLICA_HOST: pg-replica
+      PG_REPLICA_PORT: "5432"
+      PG_USER: checkout
+      PG_PASSWORD: chaos_dev_only_not_a_secret
+      PG_DATABASE: checkout
+    ports:
+      - "3000:3000"
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+      pg-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: chaos-prometheus
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - checkout-api
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: chaos-grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+  loadgen:
+    image: node:22-alpine
+    container_name: chaos-loadgen
+    working_dir: /app
+    volumes:
+      - ./loadgen/loadgen.mjs:/app/loadgen.mjs:ro
+    command: ["node", "loadgen.mjs"]
+    environment:
+      CHECKOUT_API_URL: http://checkout-api:3000
+    depends_on:
+      checkout-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pg_primary_data:
+  pg_replica_data:
