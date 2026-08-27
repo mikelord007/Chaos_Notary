@@ -12,7 +12,7 @@ sandbox for blast-radius computation.
 ## Status
 
 - **M1 — Target stack**: done, see below.
-- **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with guaranteed auto-revert on shutdown.
+- **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with bounded duration per fault and guaranteed auto-revert.
 - M3 (agent + approval gates), M4 (blast-radius sandbox),
   M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
 
@@ -85,7 +85,7 @@ bash scripts/verify-m2.sh
 | `prometheus` | `chaos-prometheus` | 9090 | Scrapes `checkout-api` every 5s |
 | `grafana` | `chaos-grafana` | 3001 | Dashboard `chaos-notary`, provisioned as code, anonymous auth |
 | `loadgen` | `chaos-loadgen` | — | Fire-and-forget traffic generator, ~10rps, 70% reads / 30% writes |
-| `chaos-mcp-server` | `chaos-mcp-server` | 3100 | MCP server exposing chaos tools: pause/stop/kill containers, inject network latency/packet loss, with bounded duration and guaranteed auto-revert |
+| `mcp-server` | `chaos-mcp-server` | 3100 | MCP server exposing chaos tools: pause/stop/kill containers, inject network latency/packet loss, with bounded duration and guaranteed auto-revert |
 
 All credentials in `docker-compose.yml` are dev-only placeholders
 (`chaos_dev_only_not_a_secret`, `chaos_dev_replica_not_a_secret`) — obviously
