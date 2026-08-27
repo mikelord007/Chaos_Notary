@@ -31,6 +31,20 @@ can't automate.
   **Do not widen the `127.0.0.1:3100:3100` binding in `docker-compose.yml`
   to expose `/mcp` more broadly — it has no authentication.**
 
+- The same TrueForge instance also needs network access to the M4
+  `blast-radius-sandbox` service, for the same reachability reasons —
+  `docker-compose.yml` publishes it as `127.0.0.1:3200:3200`, loopback-only.
+  Its `/mcp` endpoint has no authentication either; the stakes are lower
+  since `predict_blast_radius` is read-only computation with no Docker
+  access, but the same reachability pattern applies. If TrueForge runs as
+  a process on the same host as the Docker stack, it can reach the server
+  at `http://localhost:3200`. If it can't, put TrueForge on this project's
+  Docker network (as above) and reach it via its compose service DNS name,
+  `http://chaos-blast-radius-sandbox:3200`, rather than widening the
+  published host port.
+
+  **Do not widen the `127.0.0.1:3200:3200` binding either.**
+
 ## Setup
 
 1. **Register `mcp-server` as a Connector.** In TrueForge's UI, go to
@@ -54,10 +68,21 @@ can't automate.
    wired — if this schema detail is still off in some way this repo
    couldn't check, TrueForge may silently ignore an unrecognized field
    rather than erroring. Treat the manifest as ungated until verification
-   step 4 below (in "Manually verifying the approval gate") actually
+   step 5 below (in "Manually verifying the approval gate") actually
    confirms the approval prompt fires before the tool executes.
 
-2. **Load the manifest.** Via TrueForge's Agent Playground (paste/import
+2. **Register `blast-radius-sandbox` as a Connector.** Same UI, add a
+   second MCP connector pointing at `http://localhost:3200/mcp` if
+   TrueForge runs on the same host as the Docker stack, or
+   `http://chaos-blast-radius-sandbox:3200/mcp` if TrueForge is instead
+   running on this project's Docker network (see Prerequisites above — do
+   not point it at a widened `3200:3200` binding), and name it
+   `blast-radius-sandbox` — the manifest's `mcp_servers[1].name` must
+   match whatever you name it here. Unlike `mcp-server`, this entry has no
+   `require_approval_for_tools`: `predict_blast_radius` is read-only
+   computation with no Docker access, so nothing on it needs gating.
+
+3. **Load the manifest.** Via TrueForge's Agent Playground (paste/import
    `chaos-notary.json`) or its SDK (`type: "truefoundry-agent"` manifests
    can be defined in code and saved programmatically — see TrueForge's
    docs). Save it to the Agent Registry.
@@ -77,26 +102,36 @@ a real TrueForge instance before considering M3 done:
 1. Start a conversation with the loaded `chaos-notary` agent.
 2. Ask it: "Pause chaos-pg-replica for 30 seconds and tell me what you
    expect to happen."
-3. Confirm the agent calls `list_targets` first, then states its intent
-   (which container, how long, what it expects) before proposing
+3. Confirm the agent calls `list_targets` first, then `predict_blast_radius`
+   (container `chaos-pg-replica`, fault kind `pause`), then states its
+   intent (which container, how long, what it expects) before proposing
    `pause_container` — this order matches the manifest's own "How to run
-   an experiment" instructions (list_targets, then state intent, then
-   propose the call).
-4. **Confirm the approval prompt fires before the tool call executes** —
+   an experiment" instructions (list_targets, then predict_blast_radius,
+   then state intent, then propose the call).
+4. **Confirm the stated intent actually reflects `predict_blast_radius`'s
+   output, not the agent reasoning about it from scratch.** For
+   `chaos-pg-replica` + `pause`, the tool reports severity `"hard"`,
+   `GET /products` as affected, and `POST /orders` (along with
+   `GET /health` and `GET /metrics`) as unaffected — the agent's intent
+   statement should say as much (e.g. that `GET /products` will fail and
+   `POST /orders` won't be touched), not some other guess. If it states
+   something the tool didn't actually return, or skips calling the tool
+   at all, the wiring in Step 2 of the system prompt isn't working.
+5. **Confirm the approval prompt fires before the tool call executes** —
    this is the core thing being verified. If `pause_container` runs
    without a prompt, the manifest's `require_approval_for_tools` isn't
    wired correctly; check the Connector registration and the manifest's
    `mcp_servers[0].name` match.
-5. Approve it. Confirm the agent points you at
+6. Approve it. Confirm the agent points you at
    `http://localhost:3001/d/chaos-notary` to watch the effect, rather than
    claiming to have checked it itself.
-6. After 30+ seconds, ask the agent to confirm the container recovered.
+7. After 30+ seconds, ask the agent to confirm the container recovered.
    Confirm it calls `list_targets` again and reports the container's
    Docker status as running with no active fault — not "healthy," since
    `list_targets` has no application-health signal to report (only Docker
    status and fault-registry state). Check the Grafana dashboard yourself
    for actual workload recovery.
-7. Repeat step 2 asking it to target a container NOT on the allowlist
+8. Repeat step 2 asking it to target a container NOT on the allowlist
    (e.g. "pause chaos-mcp-server") — confirm the tool call is rejected and
    the agent reports that clearly rather than retrying or working around
    it.
