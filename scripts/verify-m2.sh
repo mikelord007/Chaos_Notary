@@ -17,7 +17,9 @@ API_URL="http://localhost:3000"
 MCP_URL="http://localhost:3100"
 
 call() {
-  docker compose exec -T mcp-server node dist/cliCall.js "$1" "${2:-{}}"
+  local args="${2:-}"
+  [ -n "$args" ] || args='{}'
+  docker compose exec -T mcp-server node dist/cliCall.js "$1" "$args"
 }
 
 prom_query() {
@@ -52,9 +54,9 @@ wait_for "mcp-server healthy" "curl -sf ${MCP_URL}/health"
 echo "== list_targets: expect all 5 running, no active faults =="
 targets=$(call list_targets)
 echo "$targets"
-python3 -c "
+printf '%s' "$targets" | python3 -c "
 import json, sys
-result = json.loads('''$targets''')
+result = json.load(sys.stdin)
 items = json.loads(result['content'][0]['text'])
 assert len(items) == 5, f'expected 5 targets, got {len(items)}'
 for item in items:
@@ -90,9 +92,9 @@ echo "error rate after auto-revert: ${recovered}%"
 python3 -c "assert float('$recovered') < 1.0, 'error rate did not recover after auto-revert'"
 
 status=$(call list_targets)
-python3 -c "
-import json
-result = json.loads('''$status''')
+printf '%s' "$status" | python3 -c "
+import json, sys
+result = json.load(sys.stdin)
 items = json.loads(result['content'][0]['text'])
 replica = next(i for i in items if i['container'] == 'chaos-pg-replica')
 assert replica['dockerStatus'] == 'running', f\"expected running, got {replica['dockerStatus']}\"

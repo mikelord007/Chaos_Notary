@@ -14,7 +14,8 @@ sandbox for blast-radius computation.
 - **M1 — Target stack**: done, see below.
 - **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with bounded duration per fault and guaranteed auto-revert.
 - **M3 — Agent + approval gates**: done. TrueForge agent manifest declares human approval for every destructive chaos tool; whether the gate actually fires is confirmed by manually running it against a live TrueForge instance, a check not yet performed in this repo — see [`agent/README.md`](agent/README.md) for setup and that verification walkthrough.
-- M4 (blast-radius sandbox), M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
+- **M4 — Blast-radius sandbox**: done. Sealed read-only service for predicting chaos experiment blast radius, wired as a second MCP connector in the agent manifest, with zero Docker access to ensure it cannot affect the live stack.
+- M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
 
 ## M1 — Target stack
 
@@ -75,6 +76,16 @@ verifying tool invocation, auto-revert behavior, and bounded-duration guarantees
 bash scripts/verify-m2.sh
 ```
 
+`scripts/verify-m4.sh` exercises the blast-radius sandbox in isolation (no other
+stack services required), checking its allowlist stays in sync with the MCP
+server's, its topology predictions match M1's actual DB-container blast radius,
+its latency severity threshold behaves correctly, and it rejects a
+non-allowlisted container.
+
+```bash
+bash scripts/verify-m4.sh
+```
+
 ### Services
 
 | Service | Container | Port | Role |
@@ -86,6 +97,7 @@ bash scripts/verify-m2.sh
 | `grafana` | `chaos-grafana` | 3001 | Dashboard `chaos-notary`, provisioned as code, anonymous auth |
 | `loadgen` | `chaos-loadgen` | — | Fire-and-forget traffic generator, ~10rps, 70% reads / 30% writes |
 | `mcp-server` | `chaos-mcp-server` | 3100 | MCP server exposing chaos tools: pause/stop/kill containers, inject network latency/packet loss, with bounded duration and guaranteed auto-revert |
+| `blast-radius-sandbox` | `chaos-blast-radius-sandbox` | 3200 | Read-only prediction service: computes expected blast radius of chaos experiments using static topology model, no Docker access |
 
 All credentials in `docker-compose.yml` are dev-only placeholders
 (`chaos_dev_only_not_a_secret`, `chaos_dev_replica_not_a_secret`) — obviously
@@ -97,7 +109,14 @@ self-contained non-production demo stack, not an oversight. The `/mcp`
 endpoint itself has no authentication — any client that can reach it can
 pause, stop, or kill the allowlisted containers — so the published port is
 bound to `127.0.0.1` only (see `docker-compose.yml`), not exposed to the
-wider network.
+wider network. `blast-radius-sandbox` is placed on its own dedicated
+Compose network (`sandbox-net`), separate from the implicit default network
+every other service shares — it makes zero outbound calls and depends on
+nothing, so this costs it no reachability it actually needs, while ensuring
+it cannot reach `mcp-server` (or anything else) by Docker's internal
+service-name DNS even if a compromised or buggy dependency inside it tried
+to. That keeps the "sealed sandbox" claim true at the network layer, not
+just at the application layer (no Docker socket, read-only computation).
 
 ## M2 — MCP server tool surface
 
