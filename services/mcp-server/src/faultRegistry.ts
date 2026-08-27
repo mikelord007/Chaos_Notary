@@ -97,7 +97,9 @@ export class FaultRegistry {
           }
         }
       }
-      this.log(`${container} could not be reverted after ${MAX_ATTEMPTS} attempts (still marked as an active ${fault.kind} fault) — it will be retried on the server's next startup sweep.`);
+      this.log(
+        `${container} could not be reverted after ${MAX_ATTEMPTS} attempts (still marked as an active ${fault.kind} fault). Call clear_fault to retry manually, or restart the server (the startup sweep will retry pause/stop/kill faults automatically; netem faults require manual intervention).`,
+      );
     } finally {
       this.reverting.delete(container);
     }

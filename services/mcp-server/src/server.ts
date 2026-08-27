@@ -51,6 +51,15 @@ async function main() {
   httpServer.listen(PORT, () => {
     console.log(`chaos-notary MCP server listening on :${PORT}`);
   });
+
+  async function shutdown(signal: string) {
+    console.log(`received ${signal}, reverting ${registry.list().length} active fault(s) before exit`);
+    await Promise.all(registry.list().map((fault) => registry.revertAndRemove(fault.container)));
+    httpServer.close(() => process.exit(0));
+  }
+
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 main().catch((err) => {
