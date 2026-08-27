@@ -140,6 +140,20 @@ services:
       timeout: 5s
       retries: 10
 
+  blast-radius-sandbox:
+    build: ./services/blast-radius-sandbox
+    container_name: chaos-blast-radius-sandbox
+    environment:
+      PORT: "3200"
+    ports:
+      - "127.0.0.1:3200:3200"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3200/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   pg_primary_data:
   pg_replica_data:
