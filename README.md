@@ -109,7 +109,14 @@ self-contained non-production demo stack, not an oversight. The `/mcp`
 endpoint itself has no authentication — any client that can reach it can
 pause, stop, or kill the allowlisted containers — so the published port is
 bound to `127.0.0.1` only (see `docker-compose.yml`), not exposed to the
-wider network.
+wider network. `blast-radius-sandbox` is placed on its own dedicated
+Compose network (`sandbox-net`), separate from the implicit default network
+every other service shares — it makes zero outbound calls and depends on
+nothing, so this costs it no reachability it actually needs, while ensuring
+it cannot reach `mcp-server` (or anything else) by Docker's internal
+service-name DNS even if a compromised or buggy dependency inside it tried
+to. That keeps the "sealed sandbox" claim true at the network layer, not
+just at the application layer (no Docker socket, read-only computation).
 
 ## M2 — MCP server tool surface
 

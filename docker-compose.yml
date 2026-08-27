@@ -153,6 +153,19 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    # Isolated on its own network, separate from every other service's
+    # implicit default network. blast-radius-sandbox makes zero outbound
+    # calls and depends on nothing, so it needs no reachability to
+    # mcp-server or the target stack — this keeps it that way even if a
+    # compromised/buggy process inside it tried to reach mcp-server's
+    # unauthenticated, destructive /mcp endpoint over Docker's internal
+    # service-name DNS. Host access to its own published port (127.0.0.1:3200)
+    # is unaffected by which network it's attached to.
+    networks:
+      - sandbox-net
+
+networks:
+  sandbox-net:
 
 volumes:
   pg_primary_data:
