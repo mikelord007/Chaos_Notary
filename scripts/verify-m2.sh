@@ -69,15 +69,22 @@ baseline=$(prom_query '100 * (sum(rate(http_requests_total{status=~"5.."}[1m])) 
 echo "baseline error rate: ${baseline}%"
 python3 -c "assert float('$baseline') < 1.0, 'baseline error rate too high'"
 
-echo "== pause_container(chaos-pg-replica, 30s) via MCP =="
-call pause_container '{"container":"chaos-pg-replica","duration_seconds":30}'
-sleep 30
+echo "== pause_container(chaos-pg-replica, 90s) via MCP =="
+call pause_container '{"container":"chaos-pg-replica","duration_seconds":90}'
+# Sleep a full minute so the 1m Prometheus rate window is entirely inside
+# the fault period (same lesson as verify-m1.sh: a partial window dilutes
+# the error rate below the assertion threshold even when the fault is
+# working correctly).
+sleep 60
 faulted=$(prom_query '100 * (sum(rate(http_requests_total{status=~"5.."}[1m])) or vector(0)) / sum(rate(http_requests_total[1m]))')
 echo "error rate during fault: ${faulted}%"
 python3 -c "assert float('$faulted') > 40.0, 'fault did not raise error rate enough'"
 
-echo "== waiting for auto-revert (no clear_fault call) =="
-sleep 30
+echo "== waiting for auto-revert (no clear_fault call; duration_seconds=90 must elapse on its own) =="
+# 30s more to let the fault's own 90s duration actually expire and
+# auto-revert, then another full 60s so the next Prometheus window sits
+# entirely after the revert.
+sleep 90
 recovered=$(prom_query '100 * (sum(rate(http_requests_total{status=~"5.."}[1m])) or vector(0)) / sum(rate(http_requests_total[1m]))')
 echo "error rate after auto-revert: ${recovered}%"
 python3 -c "assert float('$recovered') < 1.0, 'error rate did not recover after auto-revert'"

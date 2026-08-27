@@ -12,10 +12,13 @@ async function main() {
 
   const client = new Client({ name: "verify-m2-cli", version: "1.0.0" });
   const transport = new StreamableHTTPClientTransport(new URL("http://localhost:3100/mcp"));
-  await client.connect(transport);
   try {
+    await client.connect(transport);
     const result = await client.callTool({ name: toolName, arguments: args });
     console.log(JSON.stringify(result));
+    if (result.isError) {
+      process.exitCode = 1;
+    }
   } finally {
     await client.close();
   }
