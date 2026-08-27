@@ -10,6 +10,7 @@ import {
   handleListTargets,
   handlePauseContainer,
   handleStopContainer,
+  handleKillContainer,
   handleClearFault,
   registerTools,
 } from "../src/tools.js";
@@ -33,14 +34,32 @@ function clearAllTimers(registry: FaultRegistry): void {
 // pending forever — confirmed by a standalone repro that raced it against a
 // 3s timeout and never got a result. Real pumba stop/kill invocations are
 // one-shot processes that exit on their own (nothing calls child.kill() for
-// those paths), so FakeChild now simulates that by emitting "exit" on the
-// next tick after construction. Listeners are always attached synchronously
-// right after spawnFn() returns (before this fires), so ordering is safe.
+// those paths), so FakeChild now simulates that by emitting "spawn" (so
+// handlePauseContainer/handleInjectLatency/handleInjectPacketLoss's
+// waitForSpawn resolves) then "exit" on the next tick after construction.
+// Listeners are always attached synchronously right after spawnFn() returns
+// (before this fires), so ordering is safe.
 class FakeChild extends EventEmitter {
   killed = false;
   constructor() {
     super();
-    setImmediate(() => this.emit("exit", 0, null));
+    setImmediate(() => {
+      this.emit("spawn");
+      this.emit("exit", 0, null);
+    });
+  }
+  kill() {
+    this.killed = true;
+  }
+}
+
+// Simulates a binary that fails to launch at all (e.g. ENOENT) — Node emits
+// "error" and never "spawn"/"exit" in that case.
+class FailingSpawnChild extends EventEmitter {
+  killed = false;
+  constructor(message: string) {
+    super();
+    setImmediate(() => this.emit("error", new Error(message)));
   }
   kill() {
     this.killed = true;
@@ -127,6 +146,48 @@ test("handlePauseContainer registers a fault and rejects a second call as a conf
   assert.equal(spawnCount, 1);
 });
 
+test("handlePauseContainer rejects and registers nothing when the pumba binary fails to spawn", async () => {
+  const { docker } = fakeDocker();
+  const registry = new FaultRegistry();
+  await assert.rejects(
+    handlePauseContainer(
+      { container: "chaos-pg-replica", duration_seconds: 30 },
+      { docker, registry, spawnFn: () => new FailingSpawnChild("ENOENT") as any },
+    ),
+    /ENOENT/,
+  );
+  // The failure must be visible before the tool call returns, not just
+  // logged asynchronously after an already-successful response — and the
+  // reservation must be released so a later call isn't blocked forever.
+  assert.equal(registry.has("chaos-pg-replica"), false);
+  await assert.doesNotReject(
+    handlePauseContainer(
+      { container: "chaos-pg-replica", duration_seconds: 30 },
+      { docker, registry, spawnFn: () => new FakeChild() as any },
+    ),
+  );
+  registry.list().forEach((fault) => clearTimeout(fault.timer));
+});
+
+test("a second mutating call for the same container is rejected as a conflict even from a different tool, before either awaits Pumba", async (t) => {
+  const { docker } = fakeDocker();
+  const registry = new FaultRegistry();
+  t.after(() => clearAllTimers(registry));
+  // handleStopContainer awaits runToCompletion before it would ever
+  // register — reserve the container first, simulating that in-flight
+  // window, and confirm a concurrent handlePauseContainer sees the
+  // reservation immediately rather than racing past it.
+  registry.reserve("chaos-checkout-api", "stop");
+  await assert.rejects(
+    handlePauseContainer(
+      { container: "chaos-checkout-api", duration_seconds: 30 },
+      { docker, registry, spawnFn: () => new FakeChild() as any },
+    ),
+    ConflictError,
+  );
+  registry.release("chaos-checkout-api");
+});
+
 test("handleStopContainer registers a fault whose revert calls startContainer", async (t) => {
   const { docker, calls } = fakeDocker();
   const registry = new FaultRegistry();
@@ -137,6 +198,21 @@ test("handleStopContainer registers a fault whose revert calls startContainer", 
   );
   const fault = registry.get("chaos-checkout-api");
   assert.ok(fault);
+  await fault!.revert();
+  assert.ok(calls.includes("start"));
+});
+
+test("handleKillContainer registers a fault whose revert calls startContainer", async (t) => {
+  const { docker, calls } = fakeDocker();
+  const registry = new FaultRegistry();
+  t.after(() => clearAllTimers(registry));
+  await handleKillContainer(
+    { container: "chaos-checkout-api", duration_seconds: 30 },
+    { docker, registry, spawnFn: () => new FakeChild() as any },
+  );
+  const fault = registry.get("chaos-checkout-api");
+  assert.ok(fault);
+  assert.equal(fault!.kind, "kill");
   await fault!.revert();
   assert.ok(calls.includes("start"));
 });

@@ -31,6 +31,7 @@ interface RegisterParams {
 
 export class FaultRegistry {
   private faults = new Map<AllowedContainer, ActiveFault>();
+  private reserved = new Map<AllowedContainer, FaultKind>();
   private reverting = new Set<AllowedContainer>();
   private log: (msg: string) => void;
   private delayFn: (ms: number) => Promise<void>;
@@ -50,6 +51,30 @@ export class FaultRegistry {
 
   list(): ActiveFault[] {
     return [...this.faults.values()];
+  }
+
+  // Claims a container synchronously, before any Pumba/Docker call, so two
+  // concurrent mutating calls for the same container — even from two
+  // different tools (pause vs. stop, say) — can never both proceed past the
+  // conflict check. Without this, the check-then-act gap around the actual
+  // fault invocation (which is necessarily async) let a second call slip
+  // through while the first was still awaiting Pumba, each unaware of the
+  // other. Callers must pair every `reserve` with either `register` (which
+  // clears the reservation on success) or `release` (on any failure path).
+  reserve(container: AllowedContainer, kind: FaultKind): void {
+    const existingFault = this.faults.get(container);
+    if (existingFault) {
+      throw new ConflictError(`${container} already has an active ${existingFault.kind} fault`);
+    }
+    const existingReservation = this.reserved.get(container);
+    if (existingReservation) {
+      throw new ConflictError(`${container} already has a ${existingReservation} fault being set up`);
+    }
+    this.reserved.set(container, kind);
+  }
+
+  release(container: AllowedContainer): void {
+    this.reserved.delete(container);
   }
 
   register(params: RegisterParams): void {
@@ -74,6 +99,7 @@ export class FaultRegistry {
       timer,
       child: params.child,
     });
+    this.reserved.delete(params.container);
   }
 
   async revertAndRemove(container: AllowedContainer): Promise<void> {

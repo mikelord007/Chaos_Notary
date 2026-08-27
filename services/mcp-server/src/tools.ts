@@ -10,11 +10,12 @@ import {
   pumbaNetemDelayArgs,
   pumbaNetemLossArgs,
 } from "./pumbaCommands.js";
-import { runToCompletion, spawnDetached, realSpawn, type SpawnFn } from "./processRunner.js";
-import { FaultRegistry, ConflictError } from "./faultRegistry.js";
+import { runToCompletion, spawnDetached, waitForSpawn, isFailure, realSpawn, type SpawnFn } from "./processRunner.js";
+import { FaultRegistry } from "./faultRegistry.js";
 import { inspectContainer, unpauseContainer, startContainer } from "./dockerClient.js";
 
 const PUMBA_BIN = "pumba";
+const KILL_SIGNALS = ["SIGKILL", "SIGTERM"] as const;
 
 export interface ToolDeps {
   docker: Docker;
@@ -27,18 +28,6 @@ function requireAllowed(container: string): AllowedContainer {
     throw new Error(`${container} is not an allowed chaos target`);
   }
   return container;
-}
-
-// Checked before every mutating tool touches Pumba/Docker, not just left to
-// FaultRegistry.register's own guard — a conflict must never cost a wasted
-// (and potentially confusing) fault invocation against an already-faulted
-// target. FaultRegistry.register still re-checks internally; that's a second
-// line of defense, not the primary one.
-function requireNoActiveFault(registry: FaultRegistry, container: AllowedContainer): void {
-  const existing = registry.get(container);
-  if (existing) {
-    throw new ConflictError(`${container} already has an active ${existing.kind} fault`);
-  }
 }
 
 export async function handleListTargets(deps: ToolDeps) {
@@ -66,31 +55,40 @@ export async function handlePauseContainer(
 ) {
   const container = requireAllowed(args.container);
   validateDuration(args.duration_seconds);
-  requireNoActiveFault(deps.registry, container);
-  const spawnFn = deps.spawnFn ?? realSpawn;
-  const child = spawnDetached(
-    PUMBA_BIN,
-    pumbaPauseArgs(container, args.duration_seconds),
-    (result) => {
-      if (result.error || (result.code !== 0 && result.code !== null)) {
-        console.error(
-          `pumba pause for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
-        );
-        void deps.registry.revertAndRemove(container).catch(() => {});
-      }
-    },
-    spawnFn,
-  );
-  deps.registry.register({
-    container,
-    kind: "pause",
-    durationSeconds: args.duration_seconds,
-    child,
-    revert: async () => {
-      if (!child.killed) child.kill();
-      await unpauseContainer(deps.docker, container);
-    },
-  });
+  deps.registry.reserve(container, "pause");
+  try {
+    const spawnFn = deps.spawnFn ?? realSpawn;
+    let revertedByUs = false;
+    const child = spawnDetached(
+      PUMBA_BIN,
+      pumbaPauseArgs(container, args.duration_seconds),
+      (result) => {
+        if (revertedByUs) return;
+        if (isFailure(result)) {
+          console.error(
+            `pumba pause for ${container} failed: ${result.error?.message ?? `exit code ${result.code}, signal ${result.signal}`}`,
+          );
+          void deps.registry.revertAndRemove(container).catch(() => {});
+        }
+      },
+      spawnFn,
+    );
+    await waitForSpawn(child);
+    deps.registry.register({
+      container,
+      kind: "pause",
+      durationSeconds: args.duration_seconds,
+      child,
+      revert: async () => {
+        revertedByUs = true;
+        if (!child.killed) child.kill();
+        await unpauseContainer(deps.docker, container);
+      },
+    });
+  } catch (err) {
+    deps.registry.release(container);
+    throw err;
+  }
   return { container, expiresAt: new Date(Date.now() + args.duration_seconds * 1000).toISOString() };
 }
 
@@ -100,48 +98,58 @@ export async function handleStopContainer(
 ) {
   const container = requireAllowed(args.container);
   validateDuration(args.duration_seconds);
-  requireNoActiveFault(deps.registry, container);
-  const spawnFn = deps.spawnFn ?? realSpawn;
-  const result = await runToCompletion(PUMBA_BIN, pumbaStopArgs(container), spawnFn);
-  if (result.error || (result.code !== 0 && result.code !== null)) {
-    throw new Error(
-      `pumba stop for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
-    );
+  deps.registry.reserve(container, "stop");
+  try {
+    const spawnFn = deps.spawnFn ?? realSpawn;
+    const result = await runToCompletion(PUMBA_BIN, pumbaStopArgs(container), spawnFn);
+    if (isFailure(result)) {
+      throw new Error(
+        `pumba stop for ${container} failed: ${result.error?.message ?? `exit code ${result.code}, signal ${result.signal}`}`,
+      );
+    }
+    deps.registry.register({
+      container,
+      kind: "stop",
+      durationSeconds: args.duration_seconds,
+      revert: async () => {
+        await startContainer(deps.docker, container);
+      },
+    });
+  } catch (err) {
+    deps.registry.release(container);
+    throw err;
   }
-  deps.registry.register({
-    container,
-    kind: "stop",
-    durationSeconds: args.duration_seconds,
-    revert: async () => {
-      await startContainer(deps.docker, container);
-    },
-  });
   return { container, expiresAt: new Date(Date.now() + args.duration_seconds * 1000).toISOString() };
 }
 
 export async function handleKillContainer(
-  args: { container: string; signal?: string; duration_seconds: number },
+  args: { container: string; signal?: (typeof KILL_SIGNALS)[number]; duration_seconds: number },
   deps: ToolDeps,
 ) {
   const container = requireAllowed(args.container);
   validateDuration(args.duration_seconds);
-  requireNoActiveFault(deps.registry, container);
-  const signal = args.signal ?? "SIGKILL";
-  const spawnFn = deps.spawnFn ?? realSpawn;
-  const result = await runToCompletion(PUMBA_BIN, pumbaKillArgs(container, signal), spawnFn);
-  if (result.error || (result.code !== 0 && result.code !== null)) {
-    throw new Error(
-      `pumba kill for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
-    );
+  deps.registry.reserve(container, "kill");
+  try {
+    const signal = args.signal ?? "SIGKILL";
+    const spawnFn = deps.spawnFn ?? realSpawn;
+    const result = await runToCompletion(PUMBA_BIN, pumbaKillArgs(container, signal), spawnFn);
+    if (isFailure(result)) {
+      throw new Error(
+        `pumba kill for ${container} failed: ${result.error?.message ?? `exit code ${result.code}, signal ${result.signal}`}`,
+      );
+    }
+    deps.registry.register({
+      container,
+      kind: "kill",
+      durationSeconds: args.duration_seconds,
+      revert: async () => {
+        await startContainer(deps.docker, container);
+      },
+    });
+  } catch (err) {
+    deps.registry.release(container);
+    throw err;
   }
-  deps.registry.register({
-    container,
-    kind: "kill",
-    durationSeconds: args.duration_seconds,
-    revert: async () => {
-      await startContainer(deps.docker, container);
-    },
-  });
   return { container, expiresAt: new Date(Date.now() + args.duration_seconds * 1000).toISOString() };
 }
 
@@ -151,30 +159,39 @@ export async function handleInjectLatency(
 ) {
   const container = requireAllowed(args.container);
   validateDuration(args.duration_seconds);
-  requireNoActiveFault(deps.registry, container);
-  const spawnFn = deps.spawnFn ?? realSpawn;
-  const child = spawnDetached(
-    PUMBA_BIN,
-    pumbaNetemDelayArgs(container, args.duration_seconds, args.latency_ms, args.jitter_ms ?? 0),
-    (result) => {
-      if (result.error || (result.code !== 0 && result.code !== null)) {
-        console.error(
-          `pumba netem delay for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
-        );
-        void deps.registry.revertAndRemove(container).catch(() => {});
-      }
-    },
-    spawnFn,
-  );
-  deps.registry.register({
-    container,
-    kind: "netem_delay",
-    durationSeconds: args.duration_seconds,
-    child,
-    revert: async () => {
-      if (!child.killed) child.kill();
-    },
-  });
+  deps.registry.reserve(container, "netem_delay");
+  try {
+    const spawnFn = deps.spawnFn ?? realSpawn;
+    let revertedByUs = false;
+    const child = spawnDetached(
+      PUMBA_BIN,
+      pumbaNetemDelayArgs(container, args.duration_seconds, args.latency_ms, args.jitter_ms ?? 0),
+      (result) => {
+        if (revertedByUs) return;
+        if (isFailure(result)) {
+          console.error(
+            `pumba netem delay for ${container} failed: ${result.error?.message ?? `exit code ${result.code}, signal ${result.signal}`}`,
+          );
+          void deps.registry.revertAndRemove(container).catch(() => {});
+        }
+      },
+      spawnFn,
+    );
+    await waitForSpawn(child);
+    deps.registry.register({
+      container,
+      kind: "netem_delay",
+      durationSeconds: args.duration_seconds,
+      child,
+      revert: async () => {
+        revertedByUs = true;
+        if (!child.killed) child.kill();
+      },
+    });
+  } catch (err) {
+    deps.registry.release(container);
+    throw err;
+  }
   return { container, expiresAt: new Date(Date.now() + args.duration_seconds * 1000).toISOString() };
 }
 
@@ -184,30 +201,39 @@ export async function handleInjectPacketLoss(
 ) {
   const container = requireAllowed(args.container);
   validateDuration(args.duration_seconds);
-  requireNoActiveFault(deps.registry, container);
-  const spawnFn = deps.spawnFn ?? realSpawn;
-  const child = spawnDetached(
-    PUMBA_BIN,
-    pumbaNetemLossArgs(container, args.duration_seconds, args.percent),
-    (result) => {
-      if (result.error || (result.code !== 0 && result.code !== null)) {
-        console.error(
-          `pumba netem loss for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
-        );
-        void deps.registry.revertAndRemove(container).catch(() => {});
-      }
-    },
-    spawnFn,
-  );
-  deps.registry.register({
-    container,
-    kind: "netem_loss",
-    durationSeconds: args.duration_seconds,
-    child,
-    revert: async () => {
-      if (!child.killed) child.kill();
-    },
-  });
+  deps.registry.reserve(container, "netem_loss");
+  try {
+    const spawnFn = deps.spawnFn ?? realSpawn;
+    let revertedByUs = false;
+    const child = spawnDetached(
+      PUMBA_BIN,
+      pumbaNetemLossArgs(container, args.duration_seconds, args.percent),
+      (result) => {
+        if (revertedByUs) return;
+        if (isFailure(result)) {
+          console.error(
+            `pumba netem loss for ${container} failed: ${result.error?.message ?? `exit code ${result.code}, signal ${result.signal}`}`,
+          );
+          void deps.registry.revertAndRemove(container).catch(() => {});
+        }
+      },
+      spawnFn,
+    );
+    await waitForSpawn(child);
+    deps.registry.register({
+      container,
+      kind: "netem_loss",
+      durationSeconds: args.duration_seconds,
+      child,
+      revert: async () => {
+        revertedByUs = true;
+        if (!child.killed) child.kill();
+      },
+    });
+  } catch (err) {
+    deps.registry.release(container);
+    throw err;
+  }
   return { container, expiresAt: new Date(Date.now() + args.duration_seconds * 1000).toISOString() };
 }
 
@@ -261,7 +287,13 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       description: "Send a signal that kills a container's process for a bounded duration; auto-restarts.",
       inputSchema: {
         container: z.enum(ALLOWED_CONTAINERS),
-        signal: z.string().optional(),
+        // Restricted to signals that actually terminate the container's
+        // process (default SIGKILL). A non-terminating signal like SIGSTOP
+        // would freeze the container without Docker ever reporting it as
+        // paused/stopped — the revert (`startContainer`) would then see an
+        // already-"running" container, treat that as success, and leave it
+        // frozen forever with nothing else able to notice or fix it.
+        signal: z.enum(KILL_SIGNALS).optional(),
         duration_seconds: z.number().int().min(MIN_DURATION_SECONDS).max(MAX_DURATION_SECONDS),
       },
     },

@@ -93,13 +93,19 @@ non-production, committed intentionally for a self-contained demo stack. The
 `chaos-mcp-server` service also mounts `/var/run/docker.sock` read-write,
 which is root-equivalent access to the host's Docker daemon — like the
 credentials above, that's an intentional, disclosed choice for a
-self-contained non-production demo stack, not an oversight.
+self-contained non-production demo stack, not an oversight. The `/mcp`
+endpoint itself has no authentication — any client that can reach it can
+pause, stop, or kill the allowlisted containers — so the published port is
+bound to `127.0.0.1` only (see `docker-compose.yml`), not exposed to the
+wider network.
 
 ## M2 — MCP server tool surface
 
-The MCP server exposes 7 tools, all restricted to the 5-container allowlist
-below. Every mutating tool takes a `duration_seconds` bounded to `[5, 300]`
-and is guaranteed to auto-revert when that window elapses.
+The MCP server exposes 7 tools. The 6 that take a `container` argument
+(everything except `list_targets`) are restricted to the 5-container
+allowlist below; the 5 that inject a fault (everything except
+`list_targets` and `clear_fault`) take a `duration_seconds` bounded to
+`[5, 300]` and are guaranteed to auto-revert when that window elapses.
 
 | Tool | Effect |
 |---|---|
