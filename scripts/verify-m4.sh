@@ -25,8 +25,8 @@ else
   exit 1
 fi
 
-echo "== bringing up stack =="
-docker compose up -d --build
+echo "== bringing up blast-radius-sandbox =="
+docker compose up -d --build blast-radius-sandbox
 
 wait_for() {
   local desc="$1" cmd="$2" tries="${3:-30}"
@@ -44,15 +44,17 @@ wait_for() {
 wait_for "blast-radius-sandbox healthy" "curl -sf http://localhost:3200/health"
 
 call() {
-  docker compose exec -T blast-radius-sandbox node dist/cliCall.js "$1" "${2:-{}}"
+  local args="${2:-}"
+  [ -n "$args" ] || args='{}'
+  docker compose exec -T blast-radius-sandbox node dist/cliCall.js "$1" "$args"
 }
 
 echo "== predict_blast_radius(chaos-pg-replica, pause): expect GET /products affected, POST /orders unaffected =="
 result=$(call predict_blast_radius '{"container":"chaos-pg-replica","fault_kind":"pause"}')
 echo "$result"
-python3 -c "
-import json
-result = json.loads('''$result''')
+printf '%s' "$result" | python3 -c "
+import json, sys
+result = json.load(sys.stdin)
 prediction = json.loads(result['content'][0]['text'])
 assert prediction['severity'] == 'hard', f\"expected hard, got {prediction['severity']}\"
 assert any(i['target'] == 'GET /products' for i in prediction['affected']), 'GET /products not in affected'
@@ -63,9 +65,9 @@ print('OK: chaos-pg-replica pause prediction correct')
 echo "== predict_blast_radius(chaos-pg-primary, pause): expect POST /orders affected, GET /products unaffected =="
 result=$(call predict_blast_radius '{"container":"chaos-pg-primary","fault_kind":"pause"}')
 echo "$result"
-python3 -c "
-import json
-result = json.loads('''$result''')
+printf '%s' "$result" | python3 -c "
+import json, sys
+result = json.load(sys.stdin)
 prediction = json.loads(result['content'][0]['text'])
 assert prediction['severity'] == 'hard', f\"expected hard, got {prediction['severity']}\"
 assert any(i['target'] == 'POST /orders' for i in prediction['affected']), 'POST /orders not in affected'
@@ -76,14 +78,19 @@ print('OK: chaos-pg-primary pause prediction correct')
 echo "== predict_blast_radius severity threshold: latency below vs at/above 2000ms =="
 below=$(call predict_blast_radius '{"container":"chaos-pg-replica","fault_kind":"inject_latency","latency_ms":100}')
 above=$(call predict_blast_radius '{"container":"chaos-pg-replica","fault_kind":"inject_latency","latency_ms":3000}')
-python3 -c "
-import json
-below_pred = json.loads(json.loads('''$below''')['content'][0]['text'])
-above_pred = json.loads(json.loads('''$above''')['content'][0]['text'])
+printf '%s' "$below" | python3 -c "
+import json, sys
+below_pred = json.loads(json.load(sys.stdin)['content'][0]['text'])
 assert below_pred['severity'] == 'degraded', f\"expected degraded for 100ms, got {below_pred['severity']}\"
-assert above_pred['severity'] == 'hard', f\"expected hard for 3000ms, got {above_pred['severity']}\"
-print('OK: latency threshold behaves correctly')
+print('OK: below-threshold latency (100ms) correctly degraded')
 "
+printf '%s' "$above" | python3 -c "
+import json, sys
+above_pred = json.loads(json.load(sys.stdin)['content'][0]['text'])
+assert above_pred['severity'] == 'hard', f\"expected hard for 3000ms, got {above_pred['severity']}\"
+print('OK: at/above-threshold latency (3000ms) correctly hard')
+"
+echo "OK: latency threshold behaves correctly"
 
 echo "== predict_blast_radius rejects a non-allowlisted container =="
 set +e
