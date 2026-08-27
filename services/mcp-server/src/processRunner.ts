@@ -7,6 +7,7 @@ export const realSpawn: SpawnFn = (command, args) => spawn(command, args, { stdi
 export interface RunResult {
   code: number | null;
   signal: NodeJS.Signals | null;
+  error?: Error;
 }
 
 export function runToCompletion(
@@ -28,6 +29,7 @@ export function spawnDetached(
   spawnFn: SpawnFn = realSpawn,
 ): ChildProcess {
   const child = spawnFn(command, args);
+  child.on("error", (error) => onExit({ code: null, signal: null, error }));
   child.on("exit", (code, signal) => onExit({ code, signal }));
   return child;
 }

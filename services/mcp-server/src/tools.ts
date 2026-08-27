@@ -68,7 +68,19 @@ export async function handlePauseContainer(
   validateDuration(args.duration_seconds);
   requireNoActiveFault(deps.registry, container);
   const spawnFn = deps.spawnFn ?? realSpawn;
-  const child = spawnDetached(PUMBA_BIN, pumbaPauseArgs(container, args.duration_seconds), () => {}, spawnFn);
+  const child = spawnDetached(
+    PUMBA_BIN,
+    pumbaPauseArgs(container, args.duration_seconds),
+    (result) => {
+      if (result.error || (result.code !== 0 && result.code !== null)) {
+        console.error(
+          `pumba pause for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
+        );
+        void deps.registry.revertAndRemove(container).catch(() => {});
+      }
+    },
+    spawnFn,
+  );
   deps.registry.register({
     container,
     kind: "pause",
@@ -90,7 +102,12 @@ export async function handleStopContainer(
   validateDuration(args.duration_seconds);
   requireNoActiveFault(deps.registry, container);
   const spawnFn = deps.spawnFn ?? realSpawn;
-  await runToCompletion(PUMBA_BIN, pumbaStopArgs(container), spawnFn);
+  const result = await runToCompletion(PUMBA_BIN, pumbaStopArgs(container), spawnFn);
+  if (result.error || (result.code !== 0 && result.code !== null)) {
+    throw new Error(
+      `pumba stop for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
+    );
+  }
   deps.registry.register({
     container,
     kind: "stop",
@@ -111,7 +128,12 @@ export async function handleKillContainer(
   requireNoActiveFault(deps.registry, container);
   const signal = args.signal ?? "SIGKILL";
   const spawnFn = deps.spawnFn ?? realSpawn;
-  await runToCompletion(PUMBA_BIN, pumbaKillArgs(container, signal), spawnFn);
+  const result = await runToCompletion(PUMBA_BIN, pumbaKillArgs(container, signal), spawnFn);
+  if (result.error || (result.code !== 0 && result.code !== null)) {
+    throw new Error(
+      `pumba kill for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
+    );
+  }
   deps.registry.register({
     container,
     kind: "kill",
@@ -134,7 +156,14 @@ export async function handleInjectLatency(
   const child = spawnDetached(
     PUMBA_BIN,
     pumbaNetemDelayArgs(container, args.duration_seconds, args.latency_ms, args.jitter_ms ?? 0),
-    () => {},
+    (result) => {
+      if (result.error || (result.code !== 0 && result.code !== null)) {
+        console.error(
+          `pumba netem delay for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
+        );
+        void deps.registry.revertAndRemove(container).catch(() => {});
+      }
+    },
     spawnFn,
   );
   deps.registry.register({
@@ -160,7 +189,14 @@ export async function handleInjectPacketLoss(
   const child = spawnDetached(
     PUMBA_BIN,
     pumbaNetemLossArgs(container, args.duration_seconds, args.percent),
-    () => {},
+    (result) => {
+      if (result.error || (result.code !== 0 && result.code !== null)) {
+        console.error(
+          `pumba netem loss for ${container} failed: ${result.error?.message ?? `exit code ${result.code}`}`,
+        );
+        void deps.registry.revertAndRemove(container).catch(() => {});
+      }
+    },
     spawnFn,
   );
   deps.registry.register({
