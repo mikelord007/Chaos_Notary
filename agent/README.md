@@ -42,19 +42,20 @@ can't automate.
    `mcp-server` — the manifest's `mcp_servers[0].name` must match whatever
    you name it here.
 
-   **Unverified:** the exact field TrueForge's manifest schema uses to
-   reference a Connector-registered (as opposed to catalog) MCP server
-   wasn't confirmed against a live TrueForge instance while writing this
-   manifest — only that servers are "registered once under Settings →
-   Connectors" and "agents reference it by name." If loading the manifest
-   in the next step fails with a schema error on `mcp_servers[0]`, check
-   TrueForge's current docs/UI for the connector-reference field name and
-   adjust `chaos-notary.json` accordingly. A clean load is not proof the
-   approval gate is wired, though — if the field name is wrong, TrueForge
-   may silently ignore it rather than erroring. Treat the manifest as
-   ungated until verification step 4 below (in "Manually verifying the
-   approval gate") actually confirms the approval prompt fires before the
-   tool executes.
+   The manifest's `mcp_servers[0]` entry sets `"type": "truefoundry-mcp-registry"`
+   alongside `"name": "mcp-server"` — per TrueForge's
+   [agent manifest reference](https://www.truefoundry.com/docs/agent-platform/agent-harness/sdk/agent-manifest-reference),
+   `mcp_servers[]` is a discriminated union and `type` is required even for
+   a Connector-registered server, not just a platform-catalog one; `name`
+   is "the name of the MCP server as registered in the platform," which is
+   exactly what step 1 above sets when you name the connector `mcp-server`.
+
+   Even so, a clean manifest load is not proof the approval gate is
+   wired — if this schema detail is still off in some way this repo
+   couldn't check, TrueForge may silently ignore an unrecognized field
+   rather than erroring. Treat the manifest as ungated until verification
+   step 4 below (in "Manually verifying the approval gate") actually
+   confirms the approval prompt fires before the tool executes.
 
 2. **Load the manifest.** Via TrueForge's Agent Playground (paste/import
    `chaos-notary.json`) or its SDK (`type: "truefoundry-agent"` manifests
@@ -78,7 +79,9 @@ a real TrueForge instance before considering M3 done:
    expect to happen."
 3. Confirm the agent calls `list_targets` first, then states its intent
    (which container, how long, what it expects) before proposing
-   `pause_container`.
+   `pause_container` — this order matches the manifest's own "How to run
+   an experiment" instructions (list_targets, then state intent, then
+   propose the call).
 4. **Confirm the approval prompt fires before the tool call executes** —
    this is the core thing being verified. If `pause_container` runs
    without a prompt, the manifest's `require_approval_for_tools` isn't
@@ -88,8 +91,11 @@ a real TrueForge instance before considering M3 done:
    `http://localhost:3001/d/chaos-notary` to watch the effect, rather than
    claiming to have checked it itself.
 6. After 30+ seconds, ask the agent to confirm the container recovered.
-   Confirm it calls `list_targets` again and reports the container as
-   healthy with no active fault.
+   Confirm it calls `list_targets` again and reports the container's
+   Docker status as running with no active fault — not "healthy," since
+   `list_targets` has no application-health signal to report (only Docker
+   status and fault-registry state). Check the Grafana dashboard yourself
+   for actual workload recovery.
 7. Repeat step 2 asking it to target a container NOT on the allowlist
    (e.g. "pause chaos-mcp-server") — confirm the tool call is rejected and
    the agent reports that clearly rather than retrying or working around
