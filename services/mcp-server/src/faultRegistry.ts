@@ -1,0 +1,139 @@
+import type { ChildProcess } from "node:child_process";
+import type { AllowedContainer } from "./allowlist.js";
+import type { FaultKind } from "./pumbaCommands.js";
+
+export interface ActiveFault {
+  container: AllowedContainer;
+  kind: FaultKind;
+  startedAt: number;
+  expiresAt: number;
+  revert: () => Promise<void>;
+  timer: NodeJS.Timeout;
+  child?: ChildProcess;
+}
+
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
+interface RegisterParams {
+  container: AllowedContainer;
+  kind: FaultKind;
+  durationSeconds: number;
+  revert: () => Promise<void>;
+  child?: ChildProcess;
+  now?: number;
+  scheduleTimer?: (fn: () => void, ms: number) => NodeJS.Timeout;
+}
+
+export class FaultRegistry {
+  private faults = new Map<AllowedContainer, ActiveFault>();
+  private reserved = new Map<AllowedContainer, FaultKind>();
+  private reverting = new Set<AllowedContainer>();
+  private log: (msg: string) => void;
+  private delayFn: (ms: number) => Promise<void>;
+
+  constructor(opts?: { log?: (msg: string) => void; delayFn?: (ms: number) => Promise<void> }) {
+    this.log = opts?.log ?? ((msg) => console.error(msg));
+    this.delayFn = opts?.delayFn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
+
+  has(container: AllowedContainer): boolean {
+    return this.faults.has(container);
+  }
+
+  get(container: AllowedContainer): ActiveFault | undefined {
+    return this.faults.get(container);
+  }
+
+  list(): ActiveFault[] {
+    return [...this.faults.values()];
+  }
+
+  // Claims a container synchronously, before any Pumba/Docker call, so two
+  // concurrent mutating calls for the same container — even from two
+  // different tools (pause vs. stop, say) — can never both proceed past the
+  // conflict check. Without this, the check-then-act gap around the actual
+  // fault invocation (which is necessarily async) let a second call slip
+  // through while the first was still awaiting Pumba, each unaware of the
+  // other. Callers must pair every `reserve` with either `register` (which
+  // clears the reservation on success) or `release` (on any failure path).
+  reserve(container: AllowedContainer, kind: FaultKind): void {
+    const existingFault = this.faults.get(container);
+    if (existingFault) {
+      throw new ConflictError(`${container} already has an active ${existingFault.kind} fault`);
+    }
+    const existingReservation = this.reserved.get(container);
+    if (existingReservation) {
+      throw new ConflictError(`${container} already has a ${existingReservation} fault being set up`);
+    }
+    this.reserved.set(container, kind);
+  }
+
+  release(container: AllowedContainer): void {
+    this.reserved.delete(container);
+  }
+
+  register(params: RegisterParams): void {
+    const existing = this.faults.get(params.container);
+    if (existing) {
+      throw new ConflictError(
+        `${params.container} already has an active ${existing.kind} fault`,
+      );
+    }
+    const now = params.now ?? Date.now();
+    const schedule = params.scheduleTimer ?? ((fn, ms) => setTimeout(fn, ms));
+    const expiresAt = now + params.durationSeconds * 1000;
+    const timer = schedule(() => {
+      void this.revertAndRemove(params.container);
+    }, params.durationSeconds * 1000);
+    this.faults.set(params.container, {
+      container: params.container,
+      kind: params.kind,
+      startedAt: now,
+      expiresAt,
+      revert: params.revert,
+      timer,
+      child: params.child,
+    });
+    this.reserved.delete(params.container);
+  }
+
+  async revertAndRemove(container: AllowedContainer): Promise<void> {
+    const fault = this.faults.get(container);
+    if (!fault) return;
+    if (this.reverting.has(container)) return;
+    this.reverting.add(container);
+    try {
+      clearTimeout(fault.timer);
+      const MAX_ATTEMPTS = 3;
+      const BACKOFF_MS = [1000, 5000];
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          await fault.revert();
+          this.faults.delete(container);
+          return;
+        } catch (err) {
+          this.log(`revert attempt ${attempt}/${MAX_ATTEMPTS} for ${container} failed: ${(err as Error).message}`);
+          if (attempt < MAX_ATTEMPTS) {
+            await this.delayFn(BACKOFF_MS[attempt - 1]);
+          }
+        }
+      }
+      this.log(
+        `${container} could not be reverted after ${MAX_ATTEMPTS} attempts (still marked as an active ${fault.kind} fault). Call clear_fault to retry manually, or restart the server (the startup sweep will retry pause/stop/kill faults automatically; netem faults require manual intervention).`,
+      );
+    } finally {
+      this.reverting.delete(container);
+    }
+  }
+
+  async clear(container: AllowedContainer): Promise<boolean> {
+    if (!this.faults.has(container)) return false;
+    await this.revertAndRemove(container);
+    return !this.faults.has(container);
+  }
+}

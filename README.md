@@ -12,7 +12,8 @@ sandbox for blast-radius computation.
 ## Status
 
 - **M1 — Target stack**: done, see below.
-- M2 (MCP server), M3 (agent + approval gates), M4 (blast-radius sandbox),
+- **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with bounded duration per fault and guaranteed auto-revert.
+- M3 (agent + approval gates), M4 (blast-radius sandbox),
   M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
 
 ## M1 — Target stack
@@ -67,6 +68,13 @@ pulled from Prometheus (baseline error rate < 1%, fault-window error rate
 bash scripts/verify-m1.sh
 ```
 
+`scripts/verify-m2.sh` exercises the MCP server's chaos tools against the M1 stack,
+verifying tool invocation, auto-revert behavior, and bounded-duration guarantees.
+
+```bash
+bash scripts/verify-m2.sh
+```
+
 ### Services
 
 | Service | Container | Port | Role |
@@ -77,10 +85,41 @@ bash scripts/verify-m1.sh
 | `prometheus` | `chaos-prometheus` | 9090 | Scrapes `checkout-api` every 5s |
 | `grafana` | `chaos-grafana` | 3001 | Dashboard `chaos-notary`, provisioned as code, anonymous auth |
 | `loadgen` | `chaos-loadgen` | — | Fire-and-forget traffic generator, ~10rps, 70% reads / 30% writes |
+| `mcp-server` | `chaos-mcp-server` | 3100 | MCP server exposing chaos tools: pause/stop/kill containers, inject network latency/packet loss, with bounded duration and guaranteed auto-revert |
 
 All credentials in `docker-compose.yml` are dev-only placeholders
 (`chaos_dev_only_not_a_secret`, `chaos_dev_replica_not_a_secret`) — obviously
-non-production, committed intentionally for a self-contained demo stack.
+non-production, committed intentionally for a self-contained demo stack. The
+`chaos-mcp-server` service also mounts `/var/run/docker.sock` read-write,
+which is root-equivalent access to the host's Docker daemon — like the
+credentials above, that's an intentional, disclosed choice for a
+self-contained non-production demo stack, not an oversight. The `/mcp`
+endpoint itself has no authentication — any client that can reach it can
+pause, stop, or kill the allowlisted containers — so the published port is
+bound to `127.0.0.1` only (see `docker-compose.yml`), not exposed to the
+wider network.
+
+## M2 — MCP server tool surface
+
+The MCP server exposes 7 tools. The 6 that take a `container` argument
+(everything except `list_targets`) are restricted to the 5-container
+allowlist below; the 5 that inject a fault (everything except
+`list_targets` and `clear_fault`) take a `duration_seconds` bounded to
+`[5, 300]` and are guaranteed to auto-revert when that window elapses.
+
+| Tool | Effect |
+|---|---|
+| `list_targets` | List each allowlisted container's current Docker state and active fault, if any |
+| `pause_container` | Freeze a container's processes for a bounded duration |
+| `stop_container` | Stop a container for a bounded duration, then auto-restart |
+| `kill_container` | Send a signal that kills a container's process for a bounded duration, then auto-restart |
+| `inject_latency` | Add network latency to a container's traffic for a bounded duration |
+| `inject_packet_loss` | Drop a percentage of a container's network packets for a bounded duration |
+| `clear_fault` | Manually revert whatever fault (if any) is currently active on a container |
+
+Allowlisted containers: `chaos-pg-primary`, `chaos-pg-replica`,
+`chaos-checkout-api`, `chaos-prometheus`, `chaos-grafana`. No other container
+name is accepted by any tool.
 
 ## Qodo Code Review Evidence
 
