@@ -89,7 +89,31 @@ bash scripts/verify-m2.sh
 
 All credentials in `docker-compose.yml` are dev-only placeholders
 (`chaos_dev_only_not_a_secret`, `chaos_dev_replica_not_a_secret`) — obviously
-non-production, committed intentionally for a self-contained demo stack.
+non-production, committed intentionally for a self-contained demo stack. The
+`chaos-mcp-server` service also mounts `/var/run/docker.sock` read-write,
+which is root-equivalent access to the host's Docker daemon — like the
+credentials above, that's an intentional, disclosed choice for a
+self-contained non-production demo stack, not an oversight.
+
+## M2 — MCP server tool surface
+
+The MCP server exposes 7 tools, all restricted to the 5-container allowlist
+below. Every mutating tool takes a `duration_seconds` bounded to `[5, 300]`
+and is guaranteed to auto-revert when that window elapses.
+
+| Tool | Effect |
+|---|---|
+| `list_targets` | List each allowlisted container's current Docker state and active fault, if any |
+| `pause_container` | Freeze a container's processes for a bounded duration |
+| `stop_container` | Stop a container for a bounded duration, then auto-restart |
+| `kill_container` | Send a signal that kills a container's process for a bounded duration, then auto-restart |
+| `inject_latency` | Add network latency to a container's traffic for a bounded duration |
+| `inject_packet_loss` | Drop a percentage of a container's network packets for a bounded duration |
+| `clear_fault` | Manually revert whatever fault (if any) is currently active on a container |
+
+Allowlisted containers: `chaos-pg-primary`, `chaos-pg-replica`,
+`chaos-checkout-api`, `chaos-prometheus`, `chaos-grafana`. No other container
+name is accepted by any tool.
 
 ## Qodo Code Review Evidence
 
