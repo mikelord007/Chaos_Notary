@@ -11,19 +11,36 @@ can't automate.
 - The M1+M2 stack running: `docker compose up -d --build` from the repo
   root (see the root [`README.md`](../README.md) for details).
 - A TrueForge instance you can reach: locally via
-  `npx @truefoundry/trueforge@latest` (SQLite-backed, single command), or a
-  shared deployment. It needs network access to wherever `mcp-server` is
-  reachable — `http://localhost:3100` if TrueForge runs on the same host as
-  the Docker stack.
+  `npx @truefoundry/trueforge@latest` (SQLite-backed, single command, per
+  TrueForge's published quickstart — check TrueForge's current docs if
+  that's changed), or a shared deployment. It needs network access to
+  `mcp-server`. `docker-compose.yml` publishes that service as
+  `127.0.0.1:3100:3100` — loopback-only, on purpose, because `/mcp` has no
+  authentication and can pause/stop/kill the whole stack (see the comment
+  above that port line in `docker-compose.yml`, and the root
+  [`README.md`](../README.md)'s Qodo evidence table for PR #2, where this
+  was one of 7 real bugs found and fixed). If TrueForge runs as a process
+  on the same host as the Docker stack, it can reach the server at
+  `http://localhost:3100`. If it can't — a remote or shared TrueForge
+  deployment — put TrueForge on this project's Docker network instead (add
+  it to `docker-compose.yml`'s network, or run it with `--network` pointing
+  at this stack's compose network) and reach the server via its compose
+  service DNS name, `http://chaos-mcp-server:3100`, rather than widening
+  the published host port.
+
+  **Do not widen the `127.0.0.1:3100:3100` binding in `docker-compose.yml`
+  to expose `/mcp` more broadly — it has no authentication.**
 
 ## Setup
 
 1. **Register `mcp-server` as a Connector.** In TrueForge's UI, go to
    Settings → Connectors, add a new MCP connector pointing at
-   `http://localhost:3100/mcp` (adjust the host if TrueForge isn't running
-   on the same machine as the Docker stack), and name it `mcp-server` —
-   the manifest's `mcp_servers[0].name` must match whatever you name it
-   here.
+   `http://localhost:3100/mcp` if TrueForge runs on the same host as the
+   Docker stack, or `http://chaos-mcp-server:3100/mcp` if TrueForge is
+   instead running on this project's Docker network (see Prerequisites
+   above — do not point it at a widened `3100:3100` binding), and name it
+   `mcp-server` — the manifest's `mcp_servers[0].name` must match whatever
+   you name it here.
 
    **Unverified:** the exact field TrueForge's manifest schema uses to
    reference a Connector-registered (as opposed to catalog) MCP server
@@ -32,7 +49,12 @@ can't automate.
    Connectors" and "agents reference it by name." If loading the manifest
    in the next step fails with a schema error on `mcp_servers[0]`, check
    TrueForge's current docs/UI for the connector-reference field name and
-   adjust `chaos-notary.json` accordingly.
+   adjust `chaos-notary.json` accordingly. A clean load is not proof the
+   approval gate is wired, though — if the field name is wrong, TrueForge
+   may silently ignore it rather than erroring. Treat the manifest as
+   ungated until verification step 4 below (in "Manually verifying the
+   approval gate") actually confirms the approval prompt fires before the
+   tool executes.
 
 2. **Load the manifest.** Via TrueForge's Agent Playground (paste/import
    `chaos-notary.json`) or its SDK (`type: "truefoundry-agent"` manifests

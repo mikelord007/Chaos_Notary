@@ -13,7 +13,7 @@ sandbox for blast-radius computation.
 
 - **M1 — Target stack**: done, see below.
 - **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with bounded duration per fault and guaranteed auto-revert.
-- **M3 — Agent + approval gates**: done. TrueForge agent manifest requires human approval before any destructive chaos tool runs. See [`agent/README.md`](agent/README.md) for setup and manual verification.
+- **M3 — Agent + approval gates**: done. TrueForge agent manifest declares human approval for every destructive chaos tool; the gate itself is verified manually against a live TrueForge instance, not by an automated script. See [`agent/README.md`](agent/README.md) for setup and manual verification.
 - M4 (blast-radius sandbox), M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
 
 ## M1 — Target stack
