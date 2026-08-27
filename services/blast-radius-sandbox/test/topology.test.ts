@@ -88,3 +88,18 @@ test("inject_latency/inject_packet_loss with no latencyMs/percent given defaults
   const loss = predictBlastRadius({ container: "chaos-pg-replica", faultKind: "inject_packet_loss" });
   assert.equal(loss.severity, "degraded");
 });
+
+test("inject_latency on a non-DB container never reaches hard severity, regardless of latency", () => {
+  const result = predictBlastRadius({ container: "chaos-grafana", faultKind: "inject_latency", latencyMs: 999999 });
+  assert.equal(result.severity, "degraded");
+});
+
+test("inject_packet_loss on a non-DB container never reaches hard severity, regardless of percent", () => {
+  const result = predictBlastRadius({ container: "chaos-checkout-api", faultKind: "inject_packet_loss", percent: 100 });
+  assert.equal(result.severity, "degraded");
+});
+
+test("inject_latency on chaos-prometheus never reaches hard severity", () => {
+  const result = predictBlastRadius({ container: "chaos-prometheus", faultKind: "inject_latency", latencyMs: 999999 });
+  assert.equal(result.severity, "degraded");
+});

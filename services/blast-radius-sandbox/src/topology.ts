@@ -1,3 +1,5 @@
+import { isAllowedContainer, type AllowedContainer } from "./allowlist.js";
+
 export type FaultKind = "pause" | "stop" | "kill" | "inject_latency" | "inject_packet_loss";
 
 export interface Impact {
@@ -17,7 +19,7 @@ export interface TopologyEntry {
 export const LATENCY_HARD_THRESHOLD_MS = 2000;
 export const PACKET_LOSS_HARD_THRESHOLD_PERCENT = 80;
 
-export const TOPOLOGY: Record<string, TopologyEntry> = {
+export const TOPOLOGY: Record<AllowedContainer, TopologyEntry> = {
   "chaos-pg-replica": {
     container: "chaos-pg-replica",
     role:
@@ -127,12 +129,13 @@ export interface PredictionResult {
   notes?: string;
 }
 
+const DB_CONTAINERS = new Set(["chaos-pg-primary", "chaos-pg-replica"]);
+
 export function predictBlastRadius(input: PredictionInput): PredictionResult {
-  const entry = TOPOLOGY[input.container];
-  if (!entry) {
+  if (!isAllowedContainer(input.container)) {
     throw new Error(`${input.container} is not in the topology model`);
   }
-
+  const entry = TOPOLOGY[input.container];
   const severity = computeSeverity(input);
 
   return {
@@ -152,8 +155,12 @@ function computeSeverity(input: PredictionInput): "hard" | "degraded" {
     case "kill":
       return "hard";
     case "inject_latency":
-      return (input.latencyMs ?? 0) >= LATENCY_HARD_THRESHOLD_MS ? "hard" : "degraded";
+      return DB_CONTAINERS.has(input.container) && (input.latencyMs ?? 0) >= LATENCY_HARD_THRESHOLD_MS
+        ? "hard"
+        : "degraded";
     case "inject_packet_loss":
-      return (input.percent ?? 0) >= PACKET_LOSS_HARD_THRESHOLD_PERCENT ? "hard" : "degraded";
+      return DB_CONTAINERS.has(input.container) && (input.percent ?? 0) >= PACKET_LOSS_HARD_THRESHOLD_PERCENT
+        ? "hard"
+        : "degraded";
   }
 }

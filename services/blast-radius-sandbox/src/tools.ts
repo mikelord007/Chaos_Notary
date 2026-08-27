@@ -28,7 +28,7 @@ export function registerTools(server: McpServer): void {
     {
       title: "Predict blast radius",
       description:
-        "Predict what a proposed chaos fault will actually affect, based on M1's real topology, before running it.",
+        "Predict what a proposed chaos fault will actually affect, based on M1's real topology, before running it. For inject_latency/inject_packet_loss, pass latency_ms/percent matching what you actually intend to run — omitting them defaults to a milder 'degraded' severity prediction.",
       inputSchema: {
         container: z.enum(ALLOWED_CONTAINERS),
         fault_kind: z.enum(FAULT_KINDS),
