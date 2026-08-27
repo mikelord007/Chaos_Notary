@@ -10,6 +10,7 @@ export interface PredictArgs {
   container: string;
   fault_kind: FaultKind;
   latency_ms?: number;
+  jitter_ms?: number;
   percent?: number;
 }
 
@@ -18,6 +19,7 @@ export function handlePredictBlastRadius(args: PredictArgs): PredictionResult {
     container: args.container,
     faultKind: args.fault_kind,
     latencyMs: args.latency_ms,
+    jitterMs: args.jitter_ms,
     percent: args.percent,
   });
 }
@@ -28,11 +30,12 @@ export function registerTools(server: McpServer): void {
     {
       title: "Predict blast radius",
       description:
-        "Predict what a proposed chaos fault will actually affect, based on M1's real topology, before running it. For inject_latency/inject_packet_loss, pass latency_ms/percent matching what you actually intend to run — omitting them defaults to a milder 'degraded' severity prediction.",
+        "Predict what a proposed chaos fault will actually affect, based on M1's real topology, before running it. For inject_latency/inject_packet_loss, pass latency_ms/percent (and jitter_ms for inject_latency) matching what you actually intend to run — omitting them defaults to a milder 'degraded' severity prediction.",
       inputSchema: {
         container: z.enum(ALLOWED_CONTAINERS),
         fault_kind: z.enum(FAULT_KINDS),
         latency_ms: z.number().int().positive().optional(),
+        jitter_ms: z.number().int().nonnegative().optional(),
         percent: z.number().min(0).max(100).optional(),
       },
     },
