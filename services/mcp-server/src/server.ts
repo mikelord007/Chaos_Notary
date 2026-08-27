@@ -33,7 +33,15 @@ async function main() {
       return;
     }
     if (req.url === "/mcp") {
-      void transport.handleRequest(req, res);
+      transport.handleRequest(req, res).catch((err) => {
+        console.error("error handling /mcp request", err);
+        if (!res.headersSent) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "internal server error" }));
+        } else {
+          res.end();
+        }
+      });
       return;
     }
     res.writeHead(404);
