@@ -70,6 +70,10 @@ export const TOPOLOGY: Record<AllowedContainer, TopologyEntry> = {
       { target: "GET /products", effect: "Fails — the whole API is down." },
       { target: "POST /orders", effect: "Fails — the whole API is down." },
       {
+        target: "GET /health",
+        effect: "Fails — the whole API process is down, including its own healthcheck endpoint.",
+      },
+      {
         target: "chaos-prometheus's scrape of /metrics",
         effect:
           "Fails during the fault window (visible as a gap in Prometheus's own data, not a false reading).",
@@ -78,6 +82,7 @@ export const TOPOLOGY: Record<AllowedContainer, TopologyEntry> = {
     degradedFaultImpacts: [
       { target: "GET /products", effect: "Slower responses; the API process itself is still up and serving." },
       { target: "POST /orders", effect: "Slower responses; the API process itself is still up and serving." },
+      { target: "GET /health", effect: "Slower responses; the API process itself is still up and serving." },
     ],
     unaffected: [],
   },
@@ -90,9 +95,15 @@ export const TOPOLOGY: Record<AllowedContainer, TopologyEntry> = {
         effect:
           "Stops showing new data for the duration — you are temporarily blinding your own observability, not affecting checkout-api itself.",
       },
+      {
+        target: "Prometheus query API (:9090)",
+        effect:
+          "Unavailable for the duration — Prometheus itself is down, not just the Grafana dashboard reading from it.",
+      },
     ],
     degradedFaultImpacts: [
       { target: "Grafana dashboard (chaos-notary)", effect: "Dashboard data becomes intermittent/delayed." },
+      { target: "Prometheus query API (:9090)", effect: "Slower to respond; Prometheus itself is still up." },
     ],
     unaffected: [
       "GET /products (checkout-api's actual serving is unaffected by its passive scraper going down)",
@@ -117,6 +128,7 @@ export interface PredictionInput {
   container: string;
   faultKind: FaultKind;
   latencyMs?: number;
+  jitterMs?: number;
   percent?: number;
 }
 
@@ -137,14 +149,15 @@ export function predictBlastRadius(input: PredictionInput): PredictionResult {
   }
   const entry = TOPOLOGY[input.container];
   const severity = computeSeverity(input);
+  const noImpact = input.faultKind === "inject_packet_loss" && input.percent === 0;
 
   return {
     container: entry.container,
     faultKind: input.faultKind,
     severity,
-    affected: severity === "hard" ? entry.hardFaultImpacts : entry.degradedFaultImpacts,
+    affected: noImpact ? [] : severity === "hard" ? entry.hardFaultImpacts : entry.degradedFaultImpacts,
     unaffected: entry.unaffected,
-    notes: entry.notes,
+    notes: noImpact ? "0% packet loss configured — no traffic is dropped, no impact expected." : entry.notes,
   };
 }
 
@@ -154,13 +167,18 @@ function computeSeverity(input: PredictionInput): "hard" | "degraded" {
     case "stop":
     case "kill":
       return "hard";
-    case "inject_latency":
-      return DB_CONTAINERS.has(input.container) && (input.latencyMs ?? 0) >= LATENCY_HARD_THRESHOLD_MS
+    case "inject_latency": {
+      const worstCaseLatency = (input.latencyMs ?? 0) + (input.jitterMs ?? 0);
+      return DB_CONTAINERS.has(input.container) && worstCaseLatency >= LATENCY_HARD_THRESHOLD_MS
         ? "hard"
         : "degraded";
-    case "inject_packet_loss":
-      return DB_CONTAINERS.has(input.container) && (input.percent ?? 0) >= PACKET_LOSS_HARD_THRESHOLD_PERCENT
+    }
+    case "inject_packet_loss": {
+      const percent = input.percent ?? 0;
+      if (percent >= 100) return "hard";
+      return DB_CONTAINERS.has(input.container) && percent >= PACKET_LOSS_HARD_THRESHOLD_PERCENT
         ? "hard"
         : "degraded";
+    }
   }
 }

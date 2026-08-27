@@ -94,12 +94,65 @@ test("inject_latency on a non-DB container never reaches hard severity, regardle
   assert.equal(result.severity, "degraded");
 });
 
-test("inject_packet_loss on a non-DB container never reaches hard severity, regardless of percent", () => {
-  const result = predictBlastRadius({ container: "chaos-checkout-api", faultKind: "inject_packet_loss", percent: 100 });
+test("inject_packet_loss below 100% on a non-DB container stays degraded severity", () => {
+  const result = predictBlastRadius({ container: "chaos-checkout-api", faultKind: "inject_packet_loss", percent: 99 });
   assert.equal(result.severity, "degraded");
+});
+
+test("inject_packet_loss at 100% on a non-DB container is hard severity (total network outage)", () => {
+  const result = predictBlastRadius({ container: "chaos-checkout-api", faultKind: "inject_packet_loss", percent: 100 });
+  assert.equal(result.severity, "hard");
+});
+
+test("inject_packet_loss at 100% on chaos-grafana is hard severity too (universal rule, not container-specific)", () => {
+  const result = predictBlastRadius({ container: "chaos-grafana", faultKind: "inject_packet_loss", percent: 100 });
+  assert.equal(result.severity, "hard");
 });
 
 test("inject_latency on chaos-prometheus never reaches hard severity", () => {
   const result = predictBlastRadius({ container: "chaos-prometheus", faultKind: "inject_latency", latencyMs: 999999 });
   assert.equal(result.severity, "degraded");
+});
+
+test("inject_latency with jitter pushing a DB container's worst case over the threshold is hard severity", () => {
+  const result = predictBlastRadius({
+    container: "chaos-pg-replica",
+    faultKind: "inject_latency",
+    latencyMs: 1500,
+    jitterMs: 600,
+  });
+  assert.equal(result.severity, "hard");
+});
+
+test("inject_latency at the same base latency with no jitter stays degraded (proves jitter alone can tip it)", () => {
+  const result = predictBlastRadius({
+    container: "chaos-pg-replica",
+    faultKind: "inject_latency",
+    latencyMs: 1500,
+  });
+  assert.equal(result.severity, "degraded");
+});
+
+test("inject_packet_loss with explicit percent: 0 reports no affected impact", () => {
+  const result = predictBlastRadius({ container: "chaos-pg-replica", faultKind: "inject_packet_loss", percent: 0 });
+  assert.equal(result.severity, "degraded");
+  assert.deepEqual(result.affected, []);
+});
+
+test("inject_packet_loss with percent omitted entirely keeps the existing non-empty degraded impact list", () => {
+  const result = predictBlastRadius({ container: "chaos-pg-replica", faultKind: "inject_packet_loss" });
+  assert.equal(result.severity, "degraded");
+  assert.ok(result.affected.length > 0);
+});
+
+test("killing chaos-checkout-api affects GET /health too, not just /products and /orders", () => {
+  const result = predictBlastRadius({ container: "chaos-checkout-api", faultKind: "kill" });
+  assert.equal(result.severity, "hard");
+  assert.ok(result.affected.some((i) => i.target === "GET /health"));
+});
+
+test("stopping chaos-prometheus also affects its own query API, not just the Grafana dashboard", () => {
+  const result = predictBlastRadius({ container: "chaos-prometheus", faultKind: "stop" });
+  assert.equal(result.severity, "hard");
+  assert.ok(result.affected.some((i) => i.target.includes("Prometheus query API")));
 });
