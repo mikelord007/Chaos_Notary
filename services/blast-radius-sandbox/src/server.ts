@@ -10,8 +10,8 @@ async function main() {
   const mcpServer = new McpServer({ name: "chaos-notary-blast-radius-sandbox", version: "1.0.0" });
   registerTools(mcpServer);
 
-  // Stateless mode: each request is an independent JSON-RPC call. See M3's
-  // server.ts for why — a stateful transport with a generated session ID
+  // Stateless mode: each request is an independent JSON-RPC call. See
+  // services/mcp-server/src/server.ts (M2) for why — a stateful transport with a generated session ID
   // rejects every request after the first client session closes, and every
   // caller here (the acceptance script's cliCall.ts) is a short-lived,
   // one-call-then-disconnect client.

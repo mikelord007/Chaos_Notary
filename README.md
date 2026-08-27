@@ -76,6 +76,16 @@ verifying tool invocation, auto-revert behavior, and bounded-duration guarantees
 bash scripts/verify-m2.sh
 ```
 
+`scripts/verify-m4.sh` exercises the blast-radius sandbox in isolation (no other
+stack services required), checking its allowlist stays in sync with the MCP
+server's, its topology predictions match M1's actual DB-container blast radius,
+its latency severity threshold behaves correctly, and it rejects a
+non-allowlisted container.
+
+```bash
+bash scripts/verify-m4.sh
+```
+
 ### Services
 
 | Service | Container | Port | Role |
