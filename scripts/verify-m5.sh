@@ -91,6 +91,31 @@ set -e
 [ "$rc" -ne 0 ] || { echo "FAIL: expected empty affected_routes to be rejected"; exit 1; }
 echo "OK: empty affected_routes rejected ($rejected)"
 
+echo "== observe_impact called well after revert, with a buffered window: still reports hard/matched (C2 regression) =="
+# This is the exact scenario C2 broke: by now the fault (duration_seconds=90)
+# reverted a good while ago and more script time has elapsed since. A window
+# equal to just the fault's duration would land entirely in the recovered
+# period and report "none"/"milder_than_predicted". A buffered window
+# (duration_seconds + 60) still reaches back far enough to cover the fault's
+# active period despite the delay.
+delayed=$(call_metrics_watcher observe_impact '{"predicted_severity":"hard","affected_routes":["/products"],"window_seconds":150}')
+echo "$delayed"
+printf '%s' "$delayed" | python3 -c "
+import json, sys
+result = json.load(sys.stdin)
+observation = json.loads(result['content'][0]['text'])
+assert observation['observedSeverity'] == 'hard', f\"expected hard, got {observation['observedSeverity']}\"
+assert observation['verdict'] == 'matched', f\"expected matched, got {observation['verdict']}\"
+print('OK: buffered post-revert-delay observe_impact still reports hard/matched')
+"
+
+echo "== network isolation positive control: metrics-watcher CAN reach prometheus =="
+# Proves wget works inside the metrics-watcher image and the container can
+# reach a legitimate target, so the negative-control failure below is
+# attributable to network topology, not a broken wget/container/exec.
+docker compose exec -T metrics-watcher wget -q --timeout=5 --spider http://prometheus:9090/-/healthy
+echo "OK: metrics-watcher can reach prometheus"
+
 echo "== network isolation: metrics-watcher cannot reach mcp-server =="
 set +e
 docker compose exec -T metrics-watcher wget -q --timeout=5 --spider http://mcp-server:3100/health

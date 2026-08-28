@@ -158,18 +158,34 @@ a real TrueForge instance before considering M3 done:
    for actual workload recovery.
 8. **Confirm the closing report reflects `observe_impact`'s real verdict,
    not a restated prediction.** Let the same experiment run through to
-   completion (the agent should call `observe_impact` once Docker/fault
-   state is confirmed clean in step 7, passing the `severity` from its
-   earlier `predict_blast_radius` call as `predicted_severity`, the
-   affected routes with their HTTP verbs stripped as `affected_routes`,
-   and the fault's `duration_seconds` as `window_seconds`). Separately,
-   call `observe_impact` yourself with those same arguments for that same
-   window and compare: the agent's closing report should state the same
-   real `observedSeverity` and `verdict` your direct call returns, not
+   completion. For `chaos-pg-replica` + `pause`, `predict_blast_radius`'s
+   only `affected` target is `GET /products`, which strips down to the
+   known route `/products`, so `observe_impact` applies here and the agent
+   should call it once Docker/fault state is confirmed clean in step 7:
+   passing the `severity` from its earlier `predict_blast_radius` call as
+   `predicted_severity`, `["/products"]` as `affected_routes`, and
+   `window_seconds` set to the fault's `duration_seconds` **plus roughly 60
+   seconds of buffer** (e.g. for this 30-second pause, expect something
+   around 90, not exactly 30 — a window that ends exactly at
+   `duration_seconds` risks landing entirely in the already-recovered
+   period once the seconds of reasoning/tool-call time between the fault
+   reverting and this call are accounted for). Separately, call
+   `observe_impact` yourself with those same arguments (predicted_severity
+   `"hard"`, affected_routes `["/products"]`, and a similarly buffered
+   window_seconds) and compare: the agent's closing report should state the
+   same real `observedSeverity` and `verdict` your direct call returns, not
    just a repeat of what `predict_blast_radius` predicted earlier. If the
-   agent skips calling `observe_impact`, or its closing report only
-   restates the prediction instead of a real observed outcome, the wiring
-   from Task 9 of the M5 plan isn't working.
+   agent skips calling `observe_impact` when it does apply, passes a
+   `window_seconds` with no buffer, or its closing report only restates the
+   prediction instead of a real observed outcome, the wiring from Task 9 of
+   the M5 plan (and the C1/C2 fixes on top of it) isn't working.
+
+   Not every fault reaches this branch. If you instead run an experiment
+   whose `predict_blast_radius affected` list contains no route-shaped
+   targets (e.g. pausing `chaos-grafana`, or `inject_packet_loss` at
+   `percent: 0`), confirm the agent does NOT call `observe_impact` at all,
+   and instead says plainly that no route-level observation applies to
+   that fault.
 9. Repeat step 2 asking it to target a container NOT on the allowlist
    (e.g. "pause chaos-mcp-server") — confirm the tool call is rejected and
    the agent reports that clearly rather than retrying or working around

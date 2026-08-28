@@ -59,7 +59,7 @@ export function registerTools(
     {
       title: "Observe real chaos-experiment impact",
       description:
-        "Query Prometheus for checkout-api's real, currently-measured error rate and latency per route, and compare against a predicted severity from predict_blast_radius. Call this after a fault reverts, passing the same predicted_severity and affected routes you got from predict_blast_radius (stripped of any leading HTTP verb, e.g. 'GET /products' becomes '/products'), and the fault's duration_seconds as window_seconds.",
+        "Query Prometheus for checkout-api's real, currently-measured error rate and latency per route, and compare against a predicted severity from predict_blast_radius. Call this after a fault reverts, passing the same predicted_severity and affected routes you got from predict_blast_radius (stripped of any leading HTTP verb, e.g. 'GET /products' becomes '/products'; only pass targets that are actual routes — some predict_blast_radius targets describe impact on Prometheus/Grafana themselves and are not routes at all, so skip calling this tool if none of the affected targets are routes). Pass window_seconds with some margin beyond the fault's own duration_seconds (e.g. duration_seconds + ~60s) to account for the delay between the fault ending and this call being made — a window equal to exactly duration_seconds risks landing entirely in the already-recovered period. Note observedSeverity/verdict reflect error rate only; for a latency-only fault with no accompanying error spike, consult the response's per-route avgLatencyMs directly rather than relying on the verdict alone.",
       inputSchema: {
         predicted_severity: z.enum(["hard", "degraded"]),
         affected_routes: z.array(z.enum(KNOWN_ROUTES)).min(1),
