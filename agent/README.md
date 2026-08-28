@@ -163,22 +163,24 @@ a real TrueForge instance before considering M3 done:
    known route `/products`, so `observe_impact` applies here and the agent
    should call it once Docker/fault state is confirmed clean in step 7:
    passing the `severity` from its earlier `predict_blast_radius` call as
-   `predicted_severity`, `["/products"]` as `affected_routes`, and
-   `window_seconds` set to the fault's `duration_seconds` **plus roughly 60
-   seconds of buffer** (e.g. for this 30-second pause, expect something
-   around 90, not exactly 30 — a window that ends exactly at
-   `duration_seconds` risks landing entirely in the already-recovered
-   period once the seconds of reasoning/tool-call time between the fault
-   reverting and this call are accounted for). Separately, call
-   `observe_impact` yourself with those same arguments (predicted_severity
-   `"hard"`, affected_routes `["/products"]`, and a similarly buffered
-   window_seconds) and compare: the agent's closing report should state the
-   same real `observedSeverity` and `verdict` your direct call returns, not
-   just a repeat of what `predict_blast_radius` predicted earlier. If the
-   agent skips calling `observe_impact` when it does apply, passes a
-   `window_seconds` with no buffer, or its closing report only restates the
-   prediction instead of a real observed outcome, the wiring from Task 9 of
-   the M5 plan (and the C1/C2 fixes on top of it) isn't working.
+   `predicted_severity`, `["/products"]` as `affected_routes`, the
+   `expiresAt` value captured from the earlier `pause_container` response as
+   `fault_ended_at`, and `window_seconds` set to **exactly** the fault's
+   `duration_seconds` (e.g. `30` for this 30-second pause — no buffer
+   needed, since `fault_ended_at` lets the tool anchor its query window to
+   the fault's own active period precisely, using its own server-side
+   clock, regardless of how much reasoning/tool-call time has passed since
+   the fault reverted). Separately, call `observe_impact` yourself with
+   those same arguments (predicted_severity `"hard"`, affected_routes
+   `["/products"]`, the same `fault_ended_at`, and `window_seconds: 30`) and
+   compare: the agent's closing report should state the same real
+   `observedSeverity` and `verdict` your direct call returns, not just a
+   repeat of what `predict_blast_radius` predicted earlier. If the agent
+   skips calling `observe_impact` when it does apply, fails to pass
+   `fault_ended_at` when it captured a real `expiresAt`, or its closing
+   report only restates the prediction instead of a real observed outcome,
+   the wiring from Task 9 of the M5 plan (and the fix waves on top of it)
+   isn't working.
 
    Not every fault reaches this branch. If you instead run an experiment
    whose `predict_blast_radius affected` list contains no route-shaped
