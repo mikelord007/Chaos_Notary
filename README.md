@@ -15,7 +15,9 @@ sandbox for blast-radius computation.
 - **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with bounded duration per fault and guaranteed auto-revert.
 - **M3 — Agent + approval gates**: done. TrueForge agent manifest declares human approval for every destructive chaos tool; whether the gate actually fires is confirmed by manually running it against a live TrueForge instance, a check not yet performed in this repo — see [`agent/README.md`](agent/README.md) for setup and that verification walkthrough.
 - **M4 — Blast-radius sandbox**: done. Sealed read-only service for predicting chaos experiment blast radius, wired as a second MCP connector in the agent manifest, with zero Docker access to ensure it cannot affect the live stack.
-- M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
+- **M5 — Metrics-watcher**: done. Reports what Prometheus actually recorded after a chaos fault reverts and compares it against M4's prediction, wired as a third MCP connector in the agent manifest, closing the predict-then-observe loop.
+
+M6 (hardening) is not yet built.
 
 ## M1 — Target stack
 
@@ -86,6 +88,17 @@ non-allowlisted container.
 bash scripts/verify-m4.sh
 ```
 
+`scripts/verify-m5.sh` exercises the metrics-watcher service in isolation (the full
+stack is brought up), checking that baseline observed severity is "none," a real
+pause-triggered fault produces "hard" observed severity with a "matched" verdict,
+invalid input (empty affected_routes) is rejected, and metrics-watcher cannot reach
+mcp-server over the network (the same isolation guard applied in M4 after Qodo caught
+the gap).
+
+```bash
+bash scripts/verify-m5.sh
+```
+
 ### Services
 
 | Service | Container | Port | Role |
@@ -98,6 +111,7 @@ bash scripts/verify-m4.sh
 | `loadgen` | `chaos-loadgen` | — | Fire-and-forget traffic generator, ~10rps, 70% reads / 30% writes |
 | `mcp-server` | `chaos-mcp-server` | 3100 | MCP server exposing chaos tools: pause/stop/kill containers, inject network latency/packet loss, with bounded duration and guaranteed auto-revert |
 | `blast-radius-sandbox` | `chaos-blast-radius-sandbox` | 3200 | Read-only prediction service: computes expected blast radius of chaos experiments using static topology model, no Docker access |
+| `metrics-watcher` | `chaos-metrics-watcher` | 3300 | Observes and reports actual impact severity from live Prometheus data after chaos faults, wired as third MCP connector alongside MCP server and blast-radius-sandbox |
 
 All credentials in `docker-compose.yml` are dev-only placeholders
 (`chaos_dev_only_not_a_secret`, `chaos_dev_replica_not_a_secret`) — obviously
