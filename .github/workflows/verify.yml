@@ -1,0 +1,91 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [mcp-server, blast-radius-sandbox, metrics-watcher]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+  verify-m1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/verify-m1.sh
+      - name: Dump docker compose logs
+        if: failure()
+        run: docker compose logs > compose-logs-verify-m1.txt
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-verify-m1
+          path: compose-logs-verify-m1.txt
+
+  verify-m2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/verify-m2.sh
+      - name: Dump docker compose logs
+        if: failure()
+        run: docker compose logs > compose-logs-verify-m2.txt
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-verify-m2
+          path: compose-logs-verify-m2.txt
+
+  verify-m4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/verify-m4.sh
+      - name: Dump docker compose logs
+        if: failure()
+        run: docker compose logs > compose-logs-verify-m4.txt
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-verify-m4
+          path: compose-logs-verify-m4.txt
+
+  verify-m5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/verify-m5.sh
+      - name: Dump docker compose logs
+        if: failure()
+        run: docker compose logs > compose-logs-verify-m5.txt
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-verify-m5
+          path: compose-logs-verify-m5.txt
