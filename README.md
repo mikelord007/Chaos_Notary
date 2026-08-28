@@ -17,8 +17,7 @@ sandbox for blast-radius computation.
 - **M3 — Agent + approval gates**: done. TrueForge agent manifest declares human approval for every destructive chaos tool; whether the gate actually fires is confirmed by manually running it against a live TrueForge instance, a check not yet performed in this repo — see [`agent/README.md`](agent/README.md) for setup and that verification walkthrough.
 - **M4 — Blast-radius sandbox**: done. Sealed read-only service for predicting chaos experiment blast radius, wired as a second MCP connector in the agent manifest, with zero Docker access to ensure it cannot affect the live stack.
 - **M5 — Metrics-watcher**: done. Reports what Prometheus actually recorded after a chaos fault reverts and compares it against M4's prediction, wired as a third MCP connector in the agent manifest, closing the predict-then-observe loop. Live-verified: `scripts/verify-m5.sh` passes end to end against a real Docker daemon.
-
-M6 (hardening) is not yet built.
+- **M6 — CI hardening**: done. Every `scripts/verify-*.sh` acceptance script and every service's unit test suite now runs automatically on every PR and every push to `main` via [GitHub Actions](.github/workflows/verify.yml), and `main` is branch-protected — none of these checks can be skipped or bypassed, not even by a repo admin. Verified with a real deliberate regression (reintroducing a known-fixed bug, confirming the relevant check goes red, then reverting).
 
 ## M1 — Target stack
 
@@ -99,6 +98,16 @@ mcp-server, the same topology-isolation guard M4 established via `sandbox-net`.
 ```bash
 bash scripts/verify-m5.sh
 ```
+
+### Continuous Integration
+
+All four `verify-*.sh` scripts above, plus each service's unit test suite,
+run automatically on every pull request and every push to `main` via
+[`.github/workflows/verify.yml`](.github/workflows/verify.yml) — GitHub's
+`ubuntu-latest` runners ship with Docker and Compose v2 pre-installed, so
+no special setup is needed. `main` is branch-protected: all 7 checks
+(3 unit-test jobs + the 4 acceptance scripts) must pass before a PR can
+merge, and this applies even to repo admins.
 
 ### Services
 
