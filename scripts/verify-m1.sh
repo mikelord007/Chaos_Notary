@@ -40,7 +40,7 @@ docker compose up -d --build
 
 wait_for "checkout-api healthy" "curl -sf ${API_URL}/health"
 wait_for "replication live" \
-  "docker exec chaos-pg-primary psql -U checkout -d checkout -tAc 'select count(*) from pg_stat_replication' | grep -q '^1$'"
+  "docker exec -e PGPASSWORD=chaos_dev_only_not_a_secret chaos-pg-primary psql -U checkout -d checkout -tAc 'select count(*) from pg_stat_replication' | grep -q '^1\$'"
 
 echo "== smoke-testing routes =="
 curl -sf "${API_URL}/products" | grep -q '"name"' || { echo "FAIL: /products did not return rows"; exit 1; }
