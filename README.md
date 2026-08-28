@@ -88,12 +88,12 @@ non-allowlisted container.
 bash scripts/verify-m4.sh
 ```
 
-`scripts/verify-m5.sh` exercises the metrics-watcher service in isolation (the full
-stack is brought up), checking that baseline observed severity is "none," a real
-pause-triggered fault produces "hard" observed severity with a "matched" verdict,
-invalid input (empty affected_routes) is rejected, and metrics-watcher cannot reach
-mcp-server over the network (the same isolation guard applied in M4 after Qodo caught
-the gap).
+`scripts/verify-m5.sh` brings up the full stack and exercises the metrics-watcher
+service, checking that baseline observed severity is "none," a real pause-triggered
+fault produces "hard" observed severity with a "matched" verdict, invalid input
+(empty affected_routes) is rejected, and verifying metrics-watcher's network isolation
+from mcp-server — placed on its own `observability-net` to prevent reaching
+mcp-server, the same topology-isolation guard M4 established via `sandbox-net`.
 
 ```bash
 bash scripts/verify-m5.sh
