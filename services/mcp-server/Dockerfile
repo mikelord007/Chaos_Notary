@@ -6,7 +6,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM gaiaadm/pumba:0.10.5 AS pumba
+FROM gaiaadm/pumba:1.2.1 AS pumba
 
 FROM node:22-alpine
 WORKDIR /app
