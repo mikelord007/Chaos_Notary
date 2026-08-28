@@ -45,3 +45,24 @@ test("computeVerdict: observed is milder than predicted", () => {
 test("computeVerdict: observed is worse than predicted", () => {
   assert.equal(computeVerdict("degraded", "hard"), "worse_than_predicted");
 });
+
+test("classifyRoute: avgLatencyMs at or above 2000ms classifies as hard even with zero/null error rate", () => {
+  assert.equal(classifyRoute({ errorRatePercent: 0, avgLatencyMs: 2000, requestCount: 5 }), "hard");
+  assert.equal(classifyRoute({ errorRatePercent: null, avgLatencyMs: 2500, requestCount: 5 }), "hard");
+});
+
+test("classifyRoute: avgLatencyMs just below 2000ms does not escalate via latency alone (boundary is exact)", () => {
+  // Still governed by error rate as before — a low error rate with
+  // sub-threshold latency must NOT classify as hard.
+  assert.equal(classifyRoute({ errorRatePercent: 0, avgLatencyMs: 1999, requestCount: 5 }), "none");
+  assert.equal(classifyRoute({ errorRatePercent: 1.5, avgLatencyMs: 1999, requestCount: 5 }), "degraded");
+});
+
+test("classifyRoute: null error rate with apiWasDown true classifies as hard (genuine outage, not idle)", () => {
+  assert.equal(classifyRoute({ errorRatePercent: null, avgLatencyMs: null, requestCount: 0 }, true), "hard");
+});
+
+test("classifyRoute: null error rate with apiWasDown false (or omitted) keeps existing none behavior", () => {
+  assert.equal(classifyRoute({ errorRatePercent: null, avgLatencyMs: null, requestCount: 0 }, false), "none");
+  assert.equal(classifyRoute({ errorRatePercent: null, avgLatencyMs: null, requestCount: 0 }), "none");
+});
