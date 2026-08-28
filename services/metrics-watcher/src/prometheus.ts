@@ -37,10 +37,18 @@ export async function queryRouteMetrics(
   route: string,
   windowSeconds: number,
   fetchImpl: typeof fetch = fetch,
+  offsetSeconds: number = 0,
 ): Promise<RouteMetrics> {
+  // offsetSeconds anchors the query window to end offsetSeconds ago instead
+  // of "now" — used when the caller supplies fault_ended_at, so the window
+  // covers the fault's own active period precisely rather than guessing
+  // with a fixed buffer. See PromQL `offset` modifier docs: it applies to
+  // the whole preceding range-vector selector.
+  const offsetClause = offsetSeconds > 0 ? ` offset ${offsetSeconds}s` : "";
+
   const requestCountRaw = await query(
     baseUrl,
-    `sum(increase(http_requests_total{route="${route}"}[${windowSeconds}s]))`,
+    `sum(increase(http_requests_total{route="${route}"}[${windowSeconds}s]${offsetClause}))`,
     fetchImpl,
   );
   const requestCount = requestCountRaw ?? 0;
@@ -50,13 +58,13 @@ export async function queryRouteMetrics(
 
   const errorRatePercent = await query(
     baseUrl,
-    `100 * (sum(rate(http_requests_total{route="${route}",status=~"5.."}[${windowSeconds}s])) or vector(0)) / sum(rate(http_requests_total{route="${route}"}[${windowSeconds}s]))`,
+    `100 * (sum(rate(http_requests_total{route="${route}",status=~"5.."}[${windowSeconds}s]${offsetClause})) or vector(0)) / sum(rate(http_requests_total{route="${route}"}[${windowSeconds}s]${offsetClause}))`,
     fetchImpl,
   );
 
   const avgLatencySeconds = await query(
     baseUrl,
-    `sum(rate(http_request_duration_seconds_sum{route="${route}"}[${windowSeconds}s])) / sum(rate(http_request_duration_seconds_count{route="${route}"}[${windowSeconds}s]))`,
+    `sum(rate(http_request_duration_seconds_sum{route="${route}"}[${windowSeconds}s]${offsetClause})) / sum(rate(http_request_duration_seconds_count{route="${route}"}[${windowSeconds}s]${offsetClause}))`,
     fetchImpl,
   );
 
@@ -65,4 +73,26 @@ export async function queryRouteMetrics(
     avgLatencyMs: avgLatencySeconds !== null ? avgLatencySeconds * 1000 : null,
     requestCount,
   };
+}
+
+// Checks Prometheus's own up{job="checkout-api"} scrape-health signal over
+// the same window/offset used for route metrics. checkout-api's only
+// request counter increments in Fastify's onResponse hook, which cannot
+// fire while the process itself is paused/stopped/killed — so during a
+// full-outage fault, Prometheus's scrape of checkout-api fails entirely and
+// queryRouteMetrics sees no data at all (nulls), which is indistinguishable
+// from "genuinely idle route" without this separate signal.
+export async function checkoutApiWasDown(
+  baseUrl: string,
+  windowSeconds: number,
+  offsetSeconds: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const offsetClause = offsetSeconds > 0 ? ` offset ${offsetSeconds}s` : "";
+  const minUp = await query(
+    baseUrl,
+    `min_over_time(up{job="checkout-api"}[${windowSeconds}s]${offsetClause})`,
+    fetchImpl,
+  );
+  return minUp !== null && minUp < 1;
 }
