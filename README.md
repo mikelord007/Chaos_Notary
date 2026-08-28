@@ -1,8 +1,9 @@
 # Chaos Notary
 
 A chaos-engineering agent that runs destructive resilience experiments
-against a live system, predicts blast radius before acting, observes impact
-in real time, and stops for human approval before any irreversible action.
+against a live system, predicts blast radius before acting, checks real
+impact against its own prediction after the fact, and stops for human
+approval before any irreversible action.
 
 The agent runs on [TrueForge](https://truefoundry.com) (an existing agent
 harness). This repo builds everything around it: the target stack to break,
@@ -15,7 +16,9 @@ sandbox for blast-radius computation.
 - **M2 — MCP server**: done. Exposes chaos tools (container pause/stop/kill, network latency/loss injection) over Streamable HTTP, wrapping Pumba, with bounded duration per fault and guaranteed auto-revert.
 - **M3 — Agent + approval gates**: done. TrueForge agent manifest declares human approval for every destructive chaos tool; whether the gate actually fires is confirmed by manually running it against a live TrueForge instance, a check not yet performed in this repo — see [`agent/README.md`](agent/README.md) for setup and that verification walkthrough.
 - **M4 — Blast-radius sandbox**: done. Sealed read-only service for predicting chaos experiment blast radius, wired as a second MCP connector in the agent manifest, with zero Docker access to ensure it cannot affect the live stack.
-- M5 (metrics-watcher subagent), M6 (hardening) are not yet built.
+- **M5 — Metrics-watcher**: done. Reports what Prometheus actually recorded after a chaos fault reverts and compares it against M4's prediction, wired as a third MCP connector in the agent manifest, closing the predict-then-observe loop. The unit test suite passes and the service typechecks cleanly, but the Docker image build, the docker-compose network wiring, and `scripts/verify-m5.sh`'s live run are unverified against a real Docker daemon — a check not yet performed in this repo (Docker was unavailable throughout this milestone's implementation environment).
+
+M6 (hardening) is not yet built.
 
 ## M1 — Target stack
 
@@ -86,6 +89,17 @@ non-allowlisted container.
 bash scripts/verify-m4.sh
 ```
 
+`scripts/verify-m5.sh` brings up the full stack and exercises the metrics-watcher
+service, checking that baseline observed severity is "none," a real pause-triggered
+fault produces "hard" observed severity with a "matched" verdict, invalid input
+(empty affected_routes) is rejected, and verifying metrics-watcher's network isolation
+from mcp-server — placed on its own `observability-net` to prevent reaching
+mcp-server, the same topology-isolation guard M4 established via `sandbox-net`.
+
+```bash
+bash scripts/verify-m5.sh
+```
+
 ### Services
 
 | Service | Container | Port | Role |
@@ -98,6 +112,7 @@ bash scripts/verify-m4.sh
 | `loadgen` | `chaos-loadgen` | — | Fire-and-forget traffic generator, ~10rps, 70% reads / 30% writes |
 | `mcp-server` | `chaos-mcp-server` | 3100 | MCP server exposing chaos tools: pause/stop/kill containers, inject network latency/packet loss, with bounded duration and guaranteed auto-revert |
 | `blast-radius-sandbox` | `chaos-blast-radius-sandbox` | 3200 | Read-only prediction service: computes expected blast radius of chaos experiments using static topology model, no Docker access |
+| `metrics-watcher` | `chaos-metrics-watcher` | 3300 | Observes and reports actual impact severity from live Prometheus data after chaos faults, wired as third MCP connector alongside MCP server and blast-radius-sandbox |
 
 All credentials in `docker-compose.yml` are dev-only placeholders
 (`chaos_dev_only_not_a_secret`, `chaos_dev_replica_not_a_secret`) — obviously
@@ -109,14 +124,25 @@ self-contained non-production demo stack, not an oversight. The `/mcp`
 endpoint itself has no authentication — any client that can reach it can
 pause, stop, or kill the allowlisted containers — so the published port is
 bound to `127.0.0.1` only (see `docker-compose.yml`), not exposed to the
-wider network. `blast-radius-sandbox` is placed on its own dedicated
-Compose network (`sandbox-net`), separate from the implicit default network
-every other service shares — it makes zero outbound calls and depends on
-nothing, so this costs it no reachability it actually needs, while ensuring
-it cannot reach `mcp-server` (or anything else) by Docker's internal
-service-name DNS even if a compromised or buggy dependency inside it tried
-to. That keeps the "sealed sandbox" claim true at the network layer, not
-just at the application layer (no Docker socket, read-only computation).
+wider network. Three services now have deliberately restricted network
+membership, each isolated on its own dedicated Compose network rather than
+the implicit default network: `mcp-server` itself has none of these
+restrictions — it needs full default-network access to reach the Docker
+socket and the containers it manages — but `blast-radius-sandbox` is placed
+on its own network (`sandbox-net`), and `metrics-watcher` is placed on its
+own network (`observability-net`, shared only with `prometheus`, which is
+dual-homed onto both `default` and `observability-net` so it can still be
+scraped from and reached by `metrics-watcher`). `blast-radius-sandbox`
+makes zero outbound calls and depends on nothing, so `sandbox-net`
+isolation costs it no reachability it actually needs; `metrics-watcher`'s
+only legitimate outbound call is to `prometheus`, so `observability-net`
+isolation costs it nothing either. Both arrangements ensure neither service
+can reach `mcp-server` (or anything else outside its own dedicated network)
+by Docker's internal service-name DNS even if a compromised or buggy
+dependency inside either tried to. That keeps the "sealed sandbox" claim
+true at the network layer for `blast-radius-sandbox`, and the equivalent
+claim true for `metrics-watcher`, not just at the application layer (no
+Docker socket, read-only computation).
 
 ## M2 — MCP server tool surface
 

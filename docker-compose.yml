@@ -87,6 +87,9 @@ services:
       - "9090:9090"
     depends_on:
       - checkout-api
+    networks:
+      - default
+      - observability-net
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -170,8 +173,35 @@ services:
     networks:
       - sandbox-net
 
+  metrics-watcher:
+    build: ./services/metrics-watcher
+    container_name: chaos-metrics-watcher
+    environment:
+      PORT: "3300"
+      PROMETHEUS_URL: http://prometheus:9090
+    ports:
+      - "127.0.0.1:3300:3300"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3300/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    # Isolated on its own network, separate from every other service's
+    # implicit default network — mirrors the sandbox-net fix M4's Qodo
+    # review taught us to apply. metrics-watcher's only legitimate call is
+    # to Prometheus; this keeps it unreachable from mcp-server's
+    # unauthenticated, destructive /mcp endpoint even if a compromised
+    # process inside it tried. Host access to its own published port
+    # (127.0.0.1:3300) is unaffected by which network it's attached to.
+    networks:
+      - observability-net
+
 networks:
   sandbox-net:
+  observability-net:
 
 volumes:
   pg_primary_data:
