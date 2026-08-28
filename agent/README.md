@@ -45,6 +45,20 @@ can't automate.
 
   **Do not widen the `127.0.0.1:3200:3200` binding either.**
 
+- The same TrueForge instance also needs network access to the M5
+  `metrics-watcher` service, for the same reachability reasons —
+  `docker-compose.yml` publishes it as `127.0.0.1:3300:3300`, loopback-only.
+  Its `/mcp` endpoint has no authentication either; the stakes are lower
+  since `observe_impact` is a read-only Prometheus query with no Docker
+  access, but the same reachability pattern applies. If TrueForge runs as
+  a process on the same host as the Docker stack, it can reach the server
+  at `http://localhost:3300`. If it can't, put TrueForge on this project's
+  Docker network (as above) and reach it via its compose service DNS name,
+  `http://chaos-metrics-watcher:3300`, rather than widening the published
+  host port.
+
+  **Do not widen the `127.0.0.1:3300:3300` binding either.**
+
 ## Setup
 
 1. **Register `mcp-server` as a Connector.** In TrueForge's UI, go to
@@ -82,7 +96,18 @@ can't automate.
    `require_approval_for_tools`: `predict_blast_radius` is read-only
    computation with no Docker access, so nothing on it needs gating.
 
-3. **Load the manifest.** Via TrueForge's Agent Playground (paste/import
+3. **Register `metrics-watcher` as a Connector.** Same UI, add a third MCP
+   connector pointing at `http://localhost:3300/mcp` if TrueForge runs on
+   the same host as the Docker stack, or `http://chaos-metrics-watcher:3300/mcp`
+   if TrueForge is instead running on this project's Docker network (see
+   Prerequisites above — do not point it at a widened `3300:3300`
+   binding), and name it `metrics-watcher` — the manifest's
+   `mcp_servers[2].name` must match whatever you name it here. Like
+   `blast-radius-sandbox`, this entry has no `require_approval_for_tools`:
+   `observe_impact` is a read-only Prometheus query with no Docker access,
+   so nothing on it needs gating.
+
+4. **Load the manifest.** Via TrueForge's Agent Playground (paste/import
    `chaos-notary.json`) or its SDK (`type: "truefoundry-agent"` manifests
    can be defined in code and saved programmatically — see TrueForge's
    docs). Save it to the Agent Registry.
@@ -131,7 +156,21 @@ a real TrueForge instance before considering M3 done:
    `list_targets` has no application-health signal to report (only Docker
    status and fault-registry state). Check the Grafana dashboard yourself
    for actual workload recovery.
-8. Repeat step 2 asking it to target a container NOT on the allowlist
+8. **Confirm the closing report reflects `observe_impact`'s real verdict,
+   not a restated prediction.** Let the same experiment run through to
+   completion (the agent should call `observe_impact` once Docker/fault
+   state is confirmed clean in step 7, passing the `severity` from its
+   earlier `predict_blast_radius` call as `predicted_severity`, the
+   affected routes with their HTTP verbs stripped as `affected_routes`,
+   and the fault's `duration_seconds` as `window_seconds`). Separately,
+   call `observe_impact` yourself with those same arguments for that same
+   window and compare: the agent's closing report should state the same
+   real `observedSeverity` and `verdict` your direct call returns, not
+   just a repeat of what `predict_blast_radius` predicted earlier. If the
+   agent skips calling `observe_impact`, or its closing report only
+   restates the prediction instead of a real observed outcome, the wiring
+   from Task 9 of the M5 plan isn't working.
+9. Repeat step 2 asking it to target a container NOT on the allowlist
    (e.g. "pause chaos-mcp-server") — confirm the tool call is rejected and
    the agent reports that clearly rather than retrying or working around
    it.
