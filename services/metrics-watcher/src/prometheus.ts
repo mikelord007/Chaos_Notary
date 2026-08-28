@@ -15,7 +15,7 @@ interface PrometheusQueryResult {
 async function query(baseUrl: string, promql: string, fetchImpl: typeof fetch): Promise<number | null> {
   const url = new URL("/api/v1/query", baseUrl);
   url.searchParams.set("query", promql);
-  const res = await fetchImpl(url.toString());
+  const res = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(5000) });
   if (!res.ok) {
     throw new Error(`Prometheus query failed: ${res.status} ${res.statusText}`);
   }
@@ -25,7 +25,11 @@ async function query(baseUrl: string, promql: string, fetchImpl: typeof fetch): 
   }
   const result = body.data?.result ?? [];
   if (result.length === 0) return null;
-  return Number(result[0].value[1]);
+  const n = Number(result[0].value[1]);
+  // Prometheus can legitimately return "NaN" or "+Inf"/"-Inf" as value
+  // strings; treat those the same as "no data" rather than letting a
+  // non-finite number leak into severity classification downstream.
+  return Number.isFinite(n) ? n : null;
 }
 
 export async function queryRouteMetrics(
@@ -52,7 +56,7 @@ export async function queryRouteMetrics(
 
   const avgLatencySeconds = await query(
     baseUrl,
-    `rate(http_request_duration_seconds_sum{route="${route}"}[${windowSeconds}s]) / rate(http_request_duration_seconds_count{route="${route}"}[${windowSeconds}s])`,
+    `sum(rate(http_request_duration_seconds_sum{route="${route}"}[${windowSeconds}s])) / sum(rate(http_request_duration_seconds_count{route="${route}"}[${windowSeconds}s]))`,
     fetchImpl,
   );
 
