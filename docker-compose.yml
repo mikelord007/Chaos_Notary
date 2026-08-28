@@ -67,7 +67,13 @@ services:
       pg-replica:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      # 127.0.0.1, not localhost: this container's /etc/hosts resolves
+      # "localhost" to ::1 first, but Fastify only binds IPv4 (0.0.0.0) --
+      # every healthcheck attempt against "localhost" gets "connection
+      # refused" even though the server is genuinely up and serving real
+      # traffic (which reaches it via the container's actual IP, not
+      # loopback). Verified against a live container.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/health"]
       interval: 5s
       timeout: 5s
       retries: 10
